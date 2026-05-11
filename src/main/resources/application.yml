@@ -1,0 +1,17 @@
+spring:
+  ai:
+    google:
+      genai:
+        # Set GEMINI_API_KEY environment variable, or replace the default below.
+        # Get a key at https://aistudio.google.com/app/apikey
+        api-key: AIzaSyBETFkkMz1qyNsK6VOQM1F1D8j8sH7wGwc
+        chat:
+          options:
+            model: gemini-2.5-flash
+
+# When adding a second provider, add its block here, e.g.:
+#  openai:
+#    api-key: ${OPENAI_API_KEY:}
+#    chat:
+#      options:
+#        model: gpt-4o

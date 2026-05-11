@@ -1,0 +1,21 @@
+package com.vork.ai.function;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import com.fasterxml.jackson.annotation.JsonPropertyDescription;
+
+/**
+ * Input schema for the {@code compileJavaType} function tool.
+ *
+ * <p>The model supplies complete Java source code for a single compilation unit.
+ * All AI-generated types should live in {@code com.vork.generated} so they are
+ * easy to identify and do not collide with application classes.
+ */
+public record CompileTypeRequest(
+        @JsonProperty(required = true, value = "source")
+        @JsonPropertyDescription(
+                "Complete Java source code for a single compilation unit, including a package declaration. " +
+                "Use package com.vork.generated for all AI-generated types. " +
+                "Supports record, class, interface, and enum declarations. " + 
+                "Any record or class must implement the sh.vork.database.DatabaseEntity interface.")
+        String source
+) {}

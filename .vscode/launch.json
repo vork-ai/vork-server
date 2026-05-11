@@ -1,0 +1,28 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "java",
+            "name": "Run Vork",
+            "request": "launch",
+            "mainClass": "sh.vork.VorkApplication",
+            "projectName": "vork",
+            "env": {
+                "GEMINI_API_KEY": "${env:GEMINI_API_KEY}"
+            },
+            "vmArgs": "-Dspring.profiles.active=default"
+        },
+        {
+            "type": "java",
+            "name": "Debug Vork",
+            "request": "launch",
+            "mainClass": "sh.vork.VorkApplication",
+            "projectName": "vork",
+            "env": {
+                "GEMINI_API_KEY": "${env:GEMINI_API_KEY}"
+            },
+            "vmArgs": "-Dspring.profiles.active=default",
+            "console": "integratedTerminal"
+        }
+    ]
+}
