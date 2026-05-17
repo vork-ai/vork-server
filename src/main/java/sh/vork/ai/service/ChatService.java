@@ -21,7 +21,9 @@ import org.springframework.util.MimeType;
 import sh.vork.ai.AiProvider;
 import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiChatMessage.AttachmentRef;
+import sh.vork.ai.entity.AiChatMessage.ToolCallRef;
 import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.security.ToolSuspensionException;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.storage.FileStorageService;
 import sh.vork.storage.StoredFile;
@@ -144,28 +146,55 @@ public class ChatService {
                     + (effectiveContent.isBlank() ? "" : "\n\n" + effectiveContent);
         }
 
-        String aiContent;
-        if (media.isEmpty()) {
-            aiContent = aiService.generateWithHistory(history, effectiveContent, provider);
-        } else {
-            aiContent = aiService.generateWithHistoryAndMedia(history, effectiveContent, media, provider);
-        }
-
-        AiChatMessage aiMsg = new AiChatMessage(UUID.randomUUID().toString(), "ASSISTANT",
-                aiContent == null ? "" : aiContent, System.currentTimeMillis(),
-                refs.isEmpty() ? null : Collections.unmodifiableList(refs));
         long now = System.currentTimeMillis();
         List<AttachmentRef> userRefs = refs.isEmpty() ? null : Collections.unmodifiableList(refs);
         AiChatMessage userMsg = new AiChatMessage(UUID.randomUUID().toString(), "USER",
                 content == null ? "" : content, now, userRefs);
 
-        List<AiChatMessage> updated = new ArrayList<>(session.messages());
-        updated.add(userMsg);
-        updated.add(aiMsg);
-        sessionRepo.save(new AiSession(session.uuid(), session.provider(), session.createdAt(),
-                List.copyOf(updated)));
+        try {
+            String aiContent;
+            if (media.isEmpty()) {
+                aiContent = aiService.generateWithHistory(history, effectiveContent, provider);
+            } else {
+                aiContent = aiService.generateWithHistoryAndMedia(history, effectiveContent, media, provider);
+            }
 
-        log.info("Persisted chat turn [session={}, totalMessages={}]", sessionUuid, updated.size());
-        return aiMsg;
+            AiChatMessage aiMsg = new AiChatMessage(UUID.randomUUID().toString(), "ASSISTANT",
+                    aiContent == null ? "" : aiContent, System.currentTimeMillis(),
+                    refs.isEmpty() ? null : Collections.unmodifiableList(refs));
+
+            List<AiChatMessage> updated = new ArrayList<>(session.messages());
+            updated.add(userMsg);
+            updated.add(aiMsg);
+            sessionRepo.save(new AiSession(session.uuid(), session.provider(), session.createdAt(),
+                    List.copyOf(updated), null));
+
+            log.info("Persisted chat turn [session={}, totalMessages={}]", sessionUuid, updated.size());
+            return aiMsg;
+        } catch (ToolSuspensionException ex) {
+            String simulatedToolCallId = "pending-" + UUID.randomUUID();
+            List<ToolCallRef> pendingToolCalls = List.of(
+                    new ToolCallRef(simulatedToolCallId, "FUNCTION", ex.getToolName(), ex.getArguments()));
+
+            AiChatMessage awaiting = new AiChatMessage(
+                    UUID.randomUUID().toString(),
+                    "AWAITING_AUTHORIZATION",
+                    "Tool call requires authorization: " + ex.getToolName(),
+                    System.currentTimeMillis(),
+                    refs.isEmpty() ? null : Collections.unmodifiableList(refs),
+                    pendingToolCalls,
+                    null,
+                    null);
+
+            List<AiChatMessage> updated = new ArrayList<>(session.messages());
+            updated.add(userMsg);
+            updated.add(awaiting);
+            sessionRepo.save(new AiSession(session.uuid(), session.provider(), session.createdAt(),
+                    List.copyOf(updated), "AWAITING_AUTHORIZATION"));
+
+            log.info("Tool suspension caught for tool: {}. Frozen session state [session={}]",
+                    ex.getToolName(), sessionUuid);
+            return null;
+        }
     }
 }

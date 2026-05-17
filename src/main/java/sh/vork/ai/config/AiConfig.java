@@ -1,5 +1,6 @@
 package sh.vork.ai.config;
 
+import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
@@ -11,14 +12,19 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.util.ClassUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import sh.vork.ai.AiProvider;
 import sh.vork.ai.function.CompileTypeRequest;
+import sh.vork.ai.security.AuthorizationRuleEngine;
 import sh.vork.ai.security.Restricted;
+import sh.vork.ai.security.SecuredToolCallback;
 import sh.vork.ai.function.DeleteTypeInstanceRequest;
 import sh.vork.ai.function.GetTypeSchemaRequest;
 import sh.vork.ai.function.ListEnumValuesRequest;
@@ -95,10 +101,47 @@ public class AiConfig {
      */
     @Bean
     public ChatClient geminiChatClient(ChatClient.Builder chatClientBuilder,
-                                       List<ToolCallback> toolCallbacks) {
+                                       List<ToolCallback> toolCallbacks,
+                                       AuthorizationRuleEngine authorizationRuleEngine,
+                                       ConfigurableListableBeanFactory beanFactory) {
+        List<ToolCallback> securedToolCallbacks = toolCallbacks.stream()
+                .map(tool -> {
+                    String toolName = tool.getToolDefinition().name();
+                    if (isRestrictedTool(beanFactory, toolName)) {
+                        return (ToolCallback) new SecuredToolCallback(tool, authorizationRuleEngine);
+                    }
+                    return tool;
+                })
+                .toList();
+
         return chatClientBuilder
-                .defaultToolCallbacks(toolCallbacks.toArray(ToolCallback[]::new))
+                .defaultToolCallbacks(securedToolCallbacks.toArray(ToolCallback[]::new))
                 .build();
+    }
+
+    private static boolean isRestrictedTool(ConfigurableListableBeanFactory beanFactory, String toolName) {
+        if (!beanFactory.containsBeanDefinition(toolName)) {
+            return false;
+        }
+        BeanDefinition bd = beanFactory.getBeanDefinition(toolName);
+        String factoryBeanName = bd.getFactoryBeanName();
+        String factoryMethodName = bd.getFactoryMethodName();
+        if (factoryBeanName == null || factoryMethodName == null) {
+            return false;
+        }
+        try {
+            Object factoryBean = beanFactory.getBean(factoryBeanName);
+            Class<?> targetClass = ClassUtils.getUserClass(factoryBean);
+            for (Method method : targetClass.getDeclaredMethods()) {
+                if (method.getName().equals(factoryMethodName)
+                        && method.isAnnotationPresent(Restricted.class)) {
+                    return true;
+                }
+            }
+        } catch (Exception ignored) {
+            return false;
+        }
+        return false;
     }
 
     // -------------------------------------------------------------------------

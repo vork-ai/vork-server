@@ -40,10 +40,10 @@ public class AiOrchestrationService {
 
     private static final Logger log = LoggerFactory.getLogger(AiOrchestrationService.class);
 
-    private final Map<AiProvider, ChatClient>       registry;
+        private final Map<AiProvider, ChatClient> registry;
 
-    public AiOrchestrationService(Map<AiProvider, ChatClient> chatClientRegistry) {
-        this.registry = chatClientRegistry;
+        public AiOrchestrationService(Map<AiProvider, ChatClient> chatClientRegistry) {
+                this.registry = chatClientRegistry;
     }
 
     /**
