@@ -77,7 +77,7 @@ class ChatServiceSuspensionPersistenceTest {
 
         AiSession saved = sessionRepo.get(sessionId);
         assertNotNull(saved);
-        assertEquals("AWAITING_INPUT", saved.status());
+        assertEquals("AWAITING_AUTHORIZATION", saved.status());
         assertEquals(2, saved.messages().size(), "Expected persisted USER + PROMPT_REQUIRED messages");
 
         AiChatMessage user = saved.messages().get(0);

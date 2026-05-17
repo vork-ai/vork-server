@@ -1,0 +1,62 @@
+html,
+body {
+    height: 100%;
+    overflow: auto;
+}
+
+.authorize-page {
+    min-height: 100%;
+    background:
+        radial-gradient(circle at 20% 10%, rgba(13, 110, 253, 0.16), transparent 38%),
+        radial-gradient(circle at 80% 20%, rgba(32, 201, 151, 0.12), transparent 36%),
+        var(--bs-body-bg);
+}
+
+.authorize-main {
+    min-height: calc(100vh - 64px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.authorize-card {
+    width: min(760px, 95vw);
+    max-width: 760px;
+    border-radius: 1rem;
+    border: 1px solid rgba(13, 110, 253, 0.3);
+    box-shadow: 0 20px 55px rgba(0, 0, 0, 0.25);
+    padding: 1.2rem;
+}
+
+#tool-args {
+    background-color: rgba(0, 0, 0, 0.3);
+}
+
+.feedback-ok {
+    border: 1px solid rgba(25, 135, 84, 0.45);
+    background: rgba(25, 135, 84, 0.12);
+    border-radius: 0.55rem;
+    padding: 0.6rem 0.75rem;
+}
+
+.feedback-error {
+    border: 1px solid rgba(220, 53, 69, 0.45);
+    background: rgba(220, 53, 69, 0.12);
+    border-radius: 0.55rem;
+    padding: 0.6rem 0.75rem;
+}
+
+@media (max-width: 575.98px) {
+    .authorize-card {
+        padding: 0.95rem;
+        border-radius: 0.8rem;
+    }
+
+    .prompt-actions {
+        flex-direction: column;
+    }
+
+    .prompt-action-btn {
+        width: 100%;
+    }
+}

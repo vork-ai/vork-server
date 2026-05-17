@@ -10,10 +10,13 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
 import java.time.Instant;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -34,7 +37,11 @@ import org.slf4j.MDC;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
 import sh.vork.ai.AiProvider;
+import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.function.CompileTypeRequest;
+import sh.vork.ai.function.ExecuteTerminalCommandRequest;
 import sh.vork.ai.security.AuthorizationRuleEngine;
 import sh.vork.ai.security.Restricted;
 import sh.vork.ai.security.SecuredToolCallback;
@@ -53,12 +60,15 @@ import sh.vork.database.SortOrder;
 import sh.vork.scheduling.domain.DurationType;
 import sh.vork.scheduling.domain.ScheduledJob;
 import sh.vork.scheduling.service.AiSchedulerService;
+import sh.vork.scheduling.service.BackgroundExecutionContext;
 import sh.vork.typegen.JavaType;
 import sh.vork.typegen.JavaTypeClassLoader;
 import sh.vork.typegen.SqlParseException;
 import sh.vork.typegen.TypeDatabaseService;
 import sh.vork.typegen.TypeGenerationException;
 import sh.vork.typegen.TypeGeneratorService;
+import sh.vork.ai.tool.CompleteBackgroundTaskRequest;
+import sh.vork.ai.tool.ExecuteTerminalCommandTool;
 import sh.vork.ai.tool.ScheduleTaskRequest;
 
 /**
@@ -85,6 +95,9 @@ import sh.vork.ai.tool.ScheduleTaskRequest;
 public class AiConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AiConfig.class);
+    private static final Pattern RELATIVE_START_PATTERN = Pattern.compile(
+            "^\\s*in\\s+([a-zA-Z0-9-]+)\\s+(second|seconds|minute|minutes|hour|hours|day|days|week|weeks|month|months)\\s*$",
+            Pattern.CASE_INSENSITIVE);
 
     private final JavaTypeClassLoader typeClassLoader;
     private final TypeDatabaseService typeDatabaseService;
@@ -156,6 +169,7 @@ public class AiConfig {
                 SCHEDULING PROTOCOL:
                 - When a user asks for background, later, delayed, or recurring execution, invoke scheduleBackgroundTask.
                 - You must provide a non-empty jobName for every scheduleBackgroundTask call.
+                - startIsoTime may be either an absolute ISO-8601 instant (recommended) or a relative value like 'in 1 minute'.
                 - Because background execution is detached and runs later, backgroundPrompt must contain all required parameters,
                     assumptions, and schema details needed to complete the task without chat-history access.
 
@@ -212,7 +226,8 @@ public class AiConfig {
     public Map<AiProvider, ChatClient> chatClientRegistry(
             @Qualifier("geminiChatClient") ChatClient geminiChatClient) {
         return Map.of(
-                AiProvider.GEMINI, geminiChatClient
+            AiProvider.GEMINI, geminiChatClient,
+            AiProvider.BACKGROUND_SCHEDULER, geminiChatClient
         // AiProvider.OPENAI, openAiChatClient,
         // AiProvider.ANTHROPIC, anthropicChatClient
         );
@@ -221,6 +236,58 @@ public class AiConfig {
     // -------------------------------------------------------------------------
     // Function-calling tools
     // -------------------------------------------------------------------------
+
+    @Bean
+    public ToolCallback completeBackgroundTask(DatabaseRepository<AiSession> aiSessionRepository,
+                                               BackgroundExecutionContext backgroundExecutionContext) {
+        return FunctionToolCallback
+                .builder("completeBackgroundTask", (CompleteBackgroundTaskRequest req) -> {
+                    String sessionUuid = resolveSessionUuid();
+                    if ((sessionUuid == null || sessionUuid.isBlank() || "system".equals(sessionUuid))
+                            && req != null && req.sessionUuid() != null && !req.sessionUuid().isBlank()) {
+                        sessionUuid = req.sessionUuid().trim();
+                    }
+
+                    if (sessionUuid == null || sessionUuid.isBlank() || "system".equals(sessionUuid)) {
+                        return "{\"error\":\"This tool is only available for out-of-band background tasks.\"}";
+                    }
+
+                    AiSession session = aiSessionRepository.get(sessionUuid);
+                    if (session == null || session.originMode() != SessionOriginMode.BACKGROUND) {
+                        return "{\"error\":\"This tool is only available for out-of-band background tasks.\"}";
+                    }
+
+                    aiSessionRepository.save(new AiSession(
+                            session.uuid(),
+                            session.provider(),
+                            session.originMode(),
+                            session.username(),
+                            session.createdAt(),
+                            session.currentRoundCount(),
+                            session.messages(),
+                            AiSessionStatus.COMPLETED));
+
+                    backgroundExecutionContext.markExecutionComplete();
+                    return "{\"status\":\"shutdown_initiated\"}";
+                })
+                .description("Signals that the background task has entirely fulfilled its operational objectives and that the background processing loop should now gracefully terminate.")
+                .inputType(CompleteBackgroundTaskRequest.class)
+                .build();
+    }
+
+            @Bean
+            @Restricted
+            public ToolCallback executeTerminalCommand(ExecuteTerminalCommandTool terminalTool) {
+            return FunctionToolCallback
+                .builder("executeTerminalCommand", terminalTool::execute)
+                .description(
+                    """
+                    Execute a terminal command through the virtual SSH environment and stream the live output back to the caller. Use this for shell workflows that require interactive terminal I/O.
+                    """
+                        .stripIndent())
+                .inputType(ExecuteTerminalCommandRequest.class)
+                .build();
+            }
 
     /**
      * {@code scheduleBackgroundTask} tool — persists and schedules a background AI
@@ -241,16 +308,6 @@ public class AiConfig {
                     if (backgroundPrompt == null || backgroundPrompt.isBlank()) {
                         return "{\"status\":\"error\",\"message\":\"backgroundPrompt is required\"}";
                     }
-                    if (startIsoTime == null || startIsoTime.isBlank()) {
-                        return "{\"status\":\"error\",\"message\":\"startIsoTime is required\"}";
-                    }
-
-                    Instant startTime;
-                    try {
-                        startTime = Instant.parse(startIsoTime.trim());
-                    } catch (Exception ex) {
-                        return "{\"status\":\"error\",\"message\":\"startIsoTime must be a valid ISO-8601 instant\"}";
-                    }
 
                     DurationType durationType;
                     try {
@@ -260,6 +317,13 @@ public class AiConfig {
                         durationType = DurationType.valueOf(normalizedType);
                     } catch (Exception ex) {
                         return "{\"status\":\"error\",\"message\":\"durationType must be one of: SECONDS, MINUTES, HOURS, DAYS, WEEKS, MONTHS\"}";
+                    }
+
+                    Instant startTime;
+                    try {
+                        startTime = resolveStartTime(startIsoTime);
+                    } catch (IllegalArgumentException ex) {
+                        return "{\"status\":\"error\",\"message\":\"startIsoTime must be an ISO-8601 instant or a relative value like 'in 1 minute'\"}";
                     }
 
                     String username = resolveUsername();
@@ -296,6 +360,7 @@ public class AiConfig {
      * {@code getURLContents} tool — fetches text content from an HTTP/HTTPS URL.
      */
     @Bean
+    @Restricted
     public ToolCallback getURLContents() {
         return FunctionToolCallback
                 .builder("getURLContents", (GetURLContentsRequest req) -> {
@@ -721,5 +786,65 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
             return "system";
         }
         return sessionUuid;
+    }
+
+    private static Instant resolveStartTime(String startIsoTime) {
+        if (startIsoTime == null || startIsoTime.isBlank()) {
+            return Instant.now();
+        }
+
+        String raw = startIsoTime.trim();
+        if ("now".equalsIgnoreCase(raw)) {
+            return Instant.now();
+        }
+
+        try {
+            return Instant.parse(raw);
+        } catch (Exception ignored) {
+            // Fall through to relative parser.
+        }
+
+        Matcher matcher = RELATIVE_START_PATTERN.matcher(raw);
+        if (!matcher.matches()) {
+            throw new IllegalArgumentException("Unsupported startIsoTime format");
+        }
+
+        long amount = parseAmountToken(matcher.group(1));
+        String unit = matcher.group(2).toLowerCase(Locale.ROOT);
+
+        return switch (unit) {
+            case "second", "seconds" -> Instant.now().plus(amount, ChronoUnit.SECONDS);
+            case "minute", "minutes" -> Instant.now().plus(amount, ChronoUnit.MINUTES);
+            case "hour", "hours" -> Instant.now().plus(amount, ChronoUnit.HOURS);
+            case "day", "days" -> Instant.now().plus(amount, ChronoUnit.DAYS);
+            case "week", "weeks" -> Instant.now().plus(amount * 7, ChronoUnit.DAYS);
+            case "month", "months" -> Instant.now().plus(amount * 30, ChronoUnit.DAYS);
+            default -> throw new IllegalArgumentException("Unsupported relative unit");
+        };
+    }
+
+    private static long parseAmountToken(String amountToken) {
+        String normalized = amountToken == null ? "" : amountToken.trim().toLowerCase(Locale.ROOT);
+        if (normalized.isEmpty()) {
+            throw new IllegalArgumentException("Missing amount");
+        }
+
+        if (normalized.matches("\\d+")) {
+            return Long.parseLong(normalized);
+        }
+
+        return switch (normalized) {
+            case "a", "an", "one" -> 1;
+            case "two" -> 2;
+            case "three" -> 3;
+            case "four" -> 4;
+            case "five" -> 5;
+            case "six" -> 6;
+            case "seven" -> 7;
+            case "eight" -> 8;
+            case "nine" -> 9;
+            case "ten" -> 10;
+            default -> throw new IllegalArgumentException("Unsupported relative amount");
+        };
     }
 }

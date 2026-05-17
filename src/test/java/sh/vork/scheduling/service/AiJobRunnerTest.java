@@ -1,6 +1,7 @@
 package sh.vork.scheduling.service;
 
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -12,8 +13,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.security.core.context.SecurityContextHolder;
 
-import sh.vork.ai.AiProvider;
-import sh.vork.ai.service.AiOrchestrationService;
+import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.scheduling.domain.DurationType;
 import sh.vork.scheduling.domain.ScheduledJob;
@@ -28,12 +29,15 @@ class AiJobRunnerTest {
 
     @Test
     void run_oneShot_executesAiAndMarksCompleted() {
-        AiOrchestrationService aiService = mock(AiOrchestrationService.class);
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
 
         ScheduledJob job = new ScheduledJob(
                 "job-1",
+            "Run Once Job",
                 "Run once",
                 "sid-1",
                 "alice",
@@ -42,12 +46,21 @@ class AiJobRunnerTest {
                 DurationType.MINUTES,
                 ScheduledJobStatus.ACTIVE);
 
-        AiJobRunner runner = new AiJobRunner(job, aiService, repo);
+        when(sessionRepo.get(org.mockito.ArgumentMatchers.anyString())).thenReturn(new AiSession(
+            "sid",
+            "BACKGROUND_SCHEDULER",
+            "alice",
+            Instant.now().toEpochMilli(),
+            java.util.List.of(),
+            AiSessionStatus.COMPLETED));
+
+        AiJobRunner runner = new AiJobRunner(job, orchestrationEngine, repo, sessionRepo);
         runner.run();
 
-        verify(aiService).generate("Run once", AiProvider.GEMINI);
+        verify(orchestrationEngine).executeBackgroundTurn(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq("Run once"));
         verify(repo).save(new ScheduledJob(
                 "job-1",
+            "Run Once Job",
                 "Run once",
                 "sid-1",
                 "alice",
@@ -60,12 +73,15 @@ class AiJobRunnerTest {
 
     @Test
     void run_repeating_executesAiWithoutCompletionUpdate() {
-        AiOrchestrationService aiService = mock(AiOrchestrationService.class);
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
 
         ScheduledJob job = new ScheduledJob(
                 "job-2",
+            "Repeat Job",
                 "Repeat",
                 "sid-2",
                 "bob",
@@ -74,22 +90,25 @@ class AiJobRunnerTest {
                 DurationType.MINUTES,
                 ScheduledJobStatus.ACTIVE);
 
-        AiJobRunner runner = new AiJobRunner(job, aiService, repo);
+        AiJobRunner runner = new AiJobRunner(job, orchestrationEngine, repo, sessionRepo);
         runner.run();
 
-        verify(aiService).generate("Repeat", AiProvider.GEMINI);
+        verify(orchestrationEngine).executeBackgroundTurn(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq("Repeat"));
         verify(repo, never()).save(org.mockito.ArgumentMatchers.any());
         assertNull(SecurityContextHolder.getContext().getAuthentication());
     }
 
     @Test
     void run_aiFailure_doesNotThrowAndClearsSecurityContext() {
-        AiOrchestrationService aiService = mock(AiOrchestrationService.class);
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
 
         ScheduledJob job = new ScheduledJob(
                 "job-3",
+            "Failing Job",
                 "Fails",
                 "sid-3",
                 "carol",
@@ -98,9 +117,11 @@ class AiJobRunnerTest {
                 DurationType.MINUTES,
                 ScheduledJobStatus.ACTIVE);
 
-        when(aiService.generate("Fails", AiProvider.GEMINI)).thenThrow(new RuntimeException("boom"));
+        doThrow(new RuntimeException("boom"))
+            .when(orchestrationEngine)
+            .executeBackgroundTurn(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.eq("Fails"));
 
-        AiJobRunner runner = new AiJobRunner(job, aiService, repo);
+        AiJobRunner runner = new AiJobRunner(job, orchestrationEngine, repo, sessionRepo);
         runner.run();
 
         verify(repo, never()).save(org.mockito.ArgumentMatchers.any());

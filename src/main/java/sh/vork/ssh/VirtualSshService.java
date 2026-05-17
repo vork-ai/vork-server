@@ -3,8 +3,6 @@ package sh.vork.ssh;
 import java.io.IOException;
 import java.nio.channels.SocketChannel;
 import java.time.Duration;
-import java.util.Set;
-import java.util.stream.Collectors;
 
 import javax.annotation.PostConstruct;
 
@@ -26,12 +24,11 @@ import com.sshtools.common.ssh.SshConnection;
 import com.sshtools.common.ssh.SshException;
 import com.sshtools.common.ssh.components.SshKeyPair;
 import com.sshtools.server.AbstractSshServer;
+import com.sshtools.server.DefaultServerChannelFactory;
 import com.sshtools.server.InMemoryPublicKeyAuthenticator;
 import com.sshtools.server.SshServerContext;
-import com.sshtools.server.vsession.CommandProvider;
-import com.sshtools.server.vsession.ShellCommand;
 import com.sshtools.server.vsession.UnsupportedCommandException;
-import com.sshtools.server.vsession.VirtualChannelFactory;
+import com.sshtools.server.vsession.commands.os.NativeSessionChannel;
 import com.sshtools.synergy.nio.ConnectRequestFuture;
 import com.sshtools.synergy.nio.SshEngineContext;
 
@@ -71,37 +68,44 @@ public class VirtualSshService extends AbstractSshServer {
 			
 		}).build());
 		
-		context.setChannelFactory(new VirtualChannelFactory(new CommandProvider<ShellCommand>() {
+		context.setChannelFactory(new DefaultServerChannelFactory() {
 			@Override
-			public ShellCommand createCommand(String command, SshConnection con) throws UnsupportedCommandException {
+			public NativeSessionChannel createSessionChannel(SshConnection con) {
+				return new NativeSessionChannel(con);
+			}
+		});
+		
+		// context.setChannelFactory(new VirtualChannelFactory(new CommandProvider<ShellCommand>() {
+		// 	@Override
+		// 	public ShellCommand createCommand(String command, SshConnection con) throws UnsupportedCommandException {
 
-				VirtualCommand inst = appContext.getBeansOfType(VirtualCommandFactory.class)
-			            .values()
-			            .stream()
-			            .filter(factory -> factory.getName().equals(command))
-			            .findFirst()
-			            .orElseThrow(() -> new UnsupportedCommandException(command))
-			            .createCommand(command, con);
+		// 		VirtualCommand inst = appContext.getBeansOfType(VirtualCommandFactory.class)
+		// 	            .values()
+		// 	            .stream()
+		// 	            .filter(factory -> factory.getName().equals(command))
+		// 	            .findFirst()
+		// 	            .orElseThrow(() -> new UnsupportedCommandException(command))
+		// 	            .createCommand(command, con);
 
-	            appContext.getAutowireCapableBeanFactory().autowireBean(inst);
+	    //         appContext.getAutowireCapableBeanFactory().autowireBean(inst);
 	            
-	            return inst;
-			}
+	    //         return inst;
+		// 	}
 
-			@Override
-			public Set<String> getSupportedCommands() {
-				return appContext.getBeansOfType(VirtualCommandFactory.class)
-			            .values()
-			            .stream()
-			            .map(VirtualCommandFactory::getName) // Inherited from ShellCommand
-			            .collect(Collectors.toSet());
-			}
+		// 	@Override
+		// 	public Set<String> getSupportedCommands() {
+		// 		return appContext.getBeansOfType(VirtualCommandFactory.class)
+		// 	            .values()
+		// 	            .stream()
+		// 	            .map(VirtualCommandFactory::getName) // Inherited from ShellCommand
+		// 	            .collect(Collectors.toSet());
+		// 	}
 
-			@Override
-			public boolean supportsCommand(String command) {
-				return getSupportedCommands().contains(command);
-			}
-		}));
+		// 	@Override
+		// 	public boolean supportsCommand(String command) {
+		// 		return getSupportedCommands().contains(command);
+		// 	}
+		// }));
 		return context;
 	}
 	

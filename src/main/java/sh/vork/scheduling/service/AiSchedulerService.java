@@ -11,7 +11,8 @@ import org.slf4j.LoggerFactory;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 
-import sh.vork.ai.service.AiOrchestrationService;
+import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.scheduling.domain.DurationType;
 import sh.vork.scheduling.domain.ScheduledJob;
@@ -27,16 +28,19 @@ public class AiSchedulerService {
 
     private final ThreadPoolTaskScheduler taskScheduler;
     private final DatabaseRepository<ScheduledJob> jobRepository;
-    private final AiOrchestrationService aiService;
+    private final BackgroundOrchestrationEngine backgroundOrchestrationEngine;
+    private final DatabaseRepository<AiSession> sessionRepository;
 
     private final Map<String, ScheduledFuture<?>> activeFutures = new ConcurrentHashMap<>();
 
     public AiSchedulerService(ThreadPoolTaskScheduler taskScheduler,
                               DatabaseRepository<ScheduledJob> jobRepository,
-                              AiOrchestrationService aiService) {
+                              BackgroundOrchestrationEngine backgroundOrchestrationEngine,
+                              DatabaseRepository<AiSession> sessionRepository) {
         this.taskScheduler = taskScheduler;
         this.jobRepository = jobRepository;
-        this.aiService = aiService;
+        this.backgroundOrchestrationEngine = backgroundOrchestrationEngine;
+        this.sessionRepository = sessionRepository;
     }
 
     public ScheduledJob scheduleJob(ScheduledJob job) {
@@ -60,7 +64,7 @@ public class AiSchedulerService {
 
         jobRepository.save(normalized);
 
-        AiJobRunner runner = new AiJobRunner(normalized, aiService, jobRepository);
+        AiJobRunner runner = new AiJobRunner(normalized, backgroundOrchestrationEngine, jobRepository, sessionRepository);
         Instant start = normalized.startTime();
 
         ScheduledFuture<?> future;
@@ -100,6 +104,48 @@ public class AiSchedulerService {
                 ScheduledJobStatus.PAUSED));
 
         log.info("Scheduled job paused [id={}]", jobId);
+    }
+
+    public void resumeBackgroundSession(String sessionUuid) {
+        log.info("Resuming background session [trackingSession={}]", sessionUuid);
+        backgroundOrchestrationEngine.executeBackgroundTurn(sessionUuid, null);
+        reconcileOneShotJobCompletion(sessionUuid);
+    }
+
+    private void reconcileOneShotJobCompletion(String trackingSessionUuid) {
+        String marker = "-run-";
+        int idx = trackingSessionUuid == null ? -1 : trackingSessionUuid.indexOf(marker);
+        if (idx <= 0) {
+            return;
+        }
+
+        String jobId = trackingSessionUuid.substring(0, idx);
+        ScheduledJob job = jobRepository.get(jobId);
+        if (job == null) {
+            return;
+        }
+        if (job.repeatDuration() > 0) {
+            return;
+        }
+
+        AiSession finalSession = sessionRepository.get(trackingSessionUuid);
+        if (finalSession != null && finalSession.status() == AiSessionStatus.COMPLETED) {
+            jobRepository.save(new ScheduledJob(
+                    job.id(),
+                    job.name(),
+                    job.aiPrompt(),
+                    job.sessionUuid(),
+                    job.username(),
+                    job.startTime(),
+                    job.repeatDuration(),
+                    job.durationType(),
+                    ScheduledJobStatus.COMPLETED));
+            log.info("Scheduled AI job marked completed after authorization resume [id={}, trackingSession={}]",
+                    job.id(), trackingSessionUuid);
+        } else {
+            log.info("Authorization resume finished without terminal completion [id={}, trackingSession={}, finalSessionStatus={}]",
+                    job.id(), trackingSessionUuid, finalSession == null ? "<missing>" : finalSession.status());
+        }
     }
 
     private static Duration toDuration(long amount, DurationType type) {

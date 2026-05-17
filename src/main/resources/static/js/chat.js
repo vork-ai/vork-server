@@ -20,6 +20,12 @@ let sessionUuid = null;
 let stomp       = null;
 let waiting     = false;
 
+const terminalState = {
+    views: new Map()
+};
+
+const TERMINAL_ROW_PREFIX = 'terminal-';
+
 // Staged attachments: [{uuid, name, mimeType, aiSupported, chipEl}]
 let stagedAttachments = [];
 
@@ -149,6 +155,291 @@ function tryParseJson(text) {
     }
 }
 
+function isTerminalEventFrame(obj) {
+    return obj
+        && typeof obj === 'object'
+        && obj.type === 'EVENT'
+        && typeof obj.terminalId === 'string'
+        && (obj.status === 'TERMINAL_START' || obj.status === 'TERMINAL_END' || obj.status === 'TERMINAL_DATA');
+}
+
+function getTerminalViewId(terminalId) {
+    return TERMINAL_ROW_PREFIX + terminalId;
+}
+
+function createTerminalInlineRow(terminalId, command, options) {
+    const expanded = !options || options.expanded !== false;
+    const row = document.createElement('div');
+    row.className = 'message-row terminal-stream-row';
+    row.innerHTML =
+        '<div class="bubble assistant terminal-stream-bubble">' +
+        '  <div class="terminal-stream-header">' +
+        '    <div class="terminal-stream-title"><i class="fa-solid fa-terminal"></i> <code>' + escapeHtml(command || 'Live Terminal Stream') + '</code></div>' +
+        '    <button type="button" class="terminal-stream-toggle" aria-label="Hide output" title="Hide output">' +
+        '      <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>' +
+        '    </button>' +
+        '  </div>' +
+        '  <div class="terminal-stream-body">' +
+        '    <div class="terminal-stream-xterm"></div>' +
+        '    <pre class="terminal-stream-passive d-none"></pre>' +
+        '  </div>' +
+        '</div>';
+
+    messagesArea.insertBefore(row, typingEl);
+
+    const view = {
+        terminalId: terminalId,
+        row: row,
+        body: row.querySelector('.terminal-stream-body'),
+        xtermContainer: row.querySelector('.terminal-stream-xterm'),
+        passivePre: row.querySelector('.terminal-stream-passive'),
+        toggleBtn: row.querySelector('.terminal-stream-toggle'),
+        terminal: null,
+        fitAddon: null,
+        dataListener: null,
+        bufferedText: '',
+        live: false,
+        completed: false,
+        expanded: expanded,
+        command: command || 'Live Terminal Stream'
+    };
+
+    view.toggleBtn.addEventListener('click', function () {
+        setTerminalExpanded(view, !view.expanded);
+    });
+
+    terminalState.views.set(getTerminalViewId(terminalId), view);
+    setTerminalExpanded(view, expanded);
+    return view;
+}
+
+function setTerminalExpanded(view, expanded) {
+    if (!view) {
+        return;
+    }
+    view.expanded = !!expanded;
+    view.body.classList.toggle('d-none', !view.expanded);
+    if (view.toggleBtn) {
+        const icon = view.toggleBtn.querySelector('i');
+        if (icon) {
+            icon.className = view.expanded
+                ? 'fa-solid fa-chevron-up'
+                : 'fa-solid fa-chevron-down';
+        }
+        const label = view.expanded ? 'Hide output' : 'Show output';
+        view.toggleBtn.setAttribute('aria-label', label);
+        view.toggleBtn.setAttribute('title', label);
+        view.toggleBtn.setAttribute('aria-expanded', String(view.expanded));
+        view.toggleBtn.disabled = !view.completed && !view.live;
+    }
+}
+
+function markTerminalCompleted(view) {
+    if (!view) {
+        return;
+    }
+    view.completed = true;
+    view.live = false;
+    if (view.toggleBtn) {
+        view.toggleBtn.disabled = false;
+    }
+}
+
+function collapseCompletedTerminals() {
+    for (const view of terminalState.views.values()) {
+        if (view.completed) {
+            setTerminalExpanded(view, false);
+        }
+    }
+}
+
+function hasLaterUserMessage(messages, index) {
+    for (let i = index + 1; i < messages.length; i += 1) {
+        if (messages[i] && messages[i].role === 'USER') {
+            return true;
+        }
+    }
+    return false;
+}
+
+function findTerminalView(terminalId) {
+    return terminalState.views.get(getTerminalViewId(terminalId));
+}
+
+function cleanupTerminalLiveBindings(view) {
+    if (!view) {
+        return;
+    }
+    if (view.dataListener && view.dataListener.dispose) {
+        view.dataListener.dispose();
+    }
+    view.dataListener = null;
+    view.live = false;
+}
+
+function hasLiveTerminal() {
+    for (const view of terminalState.views.values()) {
+        if (view.live) {
+            return true;
+        }
+    }
+    return false;
+}
+
+function handleTerminalStart(frame) {
+    if (!stomp || !stomp.connected || !sessionUuid) {
+        return;
+    }
+
+    const terminalId = frame && typeof frame.terminalId === 'string' ? frame.terminalId : null;
+    if (!terminalId) {
+        return;
+    }
+
+    showTyping(false);
+    setInputEnabled(false);
+
+    const command = frame && frame.command ? String(frame.command) : 'Live Terminal Stream';
+    const view = createTerminalInlineRow(terminalId, command, { expanded: true });
+    cleanupTerminalLiveBindings(view);
+    view.bufferedText = '';
+    view.live = true;
+    view.completed = false;
+
+    view.passivePre.classList.add('d-none');
+    view.xtermContainer.classList.remove('d-none');
+    view.xtermContainer.innerHTML = '';
+
+    if (typeof Terminal !== 'function') {
+        view.passivePre.textContent = 'xterm.js is not available in this page build.';
+        view.passivePre.classList.remove('d-none');
+        view.xtermContainer.classList.add('d-none');
+        return;
+    }
+
+    const term = new Terminal({
+        convertEol: true,
+        cursorBlink: true,
+        fontSize: 13,
+        fontFamily: "'Menlo', 'Monaco', 'Consolas', monospace"
+    });
+    view.terminal = term;
+    term.open(view.xtermContainer);
+
+    if (typeof FitAddon !== 'undefined' && typeof FitAddon.FitAddon === 'function') {
+        view.fitAddon = new FitAddon.FitAddon();
+        term.loadAddon(view.fitAddon);
+        view.fitAddon.fit();
+    }
+
+    if (command) {
+        term.writeln('$ ' + command);
+        view.bufferedText += '$ ' + command + '\n';
+    }
+
+    view.dataListener = term.onData(function (data) {
+        if (!stomp || !stomp.connected) {
+            return;
+        }
+        const binary = new TextEncoder().encode(data);
+        stomp.publish({
+            destination: '/app/chat/terminal/input/' + sessionUuid + '/' + terminalId,
+            binaryBody: binary
+        });
+    });
+
+    scrollBottom();
+}
+
+function handleTerminalData(frame) {
+    const terminalId = frame && typeof frame.terminalId === 'string' ? frame.terminalId : null;
+    if (!terminalId) {
+        return;
+    }
+
+    const view = findTerminalView(terminalId);
+    if (!view) {
+        return;
+    }
+
+    const chunk = frame && typeof frame.chunk === 'string' ? frame.chunk : '';
+    if (!chunk) {
+        return;
+    }
+
+    view.bufferedText += chunk;
+    if (view.terminal) {
+        view.terminal.write(chunk);
+    }
+    scrollBottom();
+}
+
+function handleTerminalEnd(frame) {
+    const terminalId = frame && typeof frame.terminalId === 'string' ? frame.terminalId : null;
+    if (!terminalId) {
+        if (!hasLiveTerminal()) {
+            setInputEnabled(true);
+            focusMessageInput();
+        }
+        return;
+    }
+
+    const view = findTerminalView(terminalId);
+    cleanupTerminalLiveBindings(view);
+
+    if (!view) {
+        if (!hasLiveTerminal()) {
+            setInputEnabled(true);
+            focusMessageInput();
+        }
+        return;
+    }
+
+    if (view.terminal) {
+        view.terminal.dispose();
+        view.terminal = null;
+    }
+    view.fitAddon = null;
+    markTerminalCompleted(view);
+
+    view.passivePre.textContent = view.bufferedText || '(no terminal output)';
+    view.passivePre.classList.remove('d-none');
+    view.xtermContainer.classList.add('d-none');
+    setTerminalExpanded(view, view.expanded);
+
+    if (!hasLiveTerminal()) {
+        setInputEnabled(true);
+        focusMessageInput();
+    }
+}
+
+function renderTerminalTranscript(terminalId, command, output, expanded) {
+    const view = createTerminalInlineRow(terminalId, command, { expanded: expanded });
+    view.bufferedText = output || '';
+    view.completed = true;
+    view.live = false;
+    view.xtermContainer.classList.add('d-none');
+    view.passivePre.textContent = view.bufferedText || '(no terminal output)';
+    view.passivePre.classList.remove('d-none');
+    setTerminalExpanded(view, expanded);
+    return view;
+}
+
+function tryGetTerminalTranscript(msg) {
+    if (!msg || msg.role !== 'TOOL' || msg.toolName !== 'executeTerminalCommand') {
+        return null;
+    }
+    const payload = tryParseJson(msg.content);
+    if (!payload || !payload.terminalTranscript || typeof payload.terminalTranscript !== 'object') {
+        return null;
+    }
+    const transcript = payload.terminalTranscript;
+    return {
+        command: typeof transcript.command === 'string' ? transcript.command : 'terminal command',
+        output: typeof transcript.output === 'string' ? transcript.output : ''
+    };
+}
+
 function renderPromptRequiredFrame(frame) {
     const payload = frame.payload || {};
     const reasoning = typeof payload.reasoning === 'string' && payload.reasoning.trim()
@@ -198,6 +489,17 @@ function renderPromptRequiredFrame(frame) {
 }
 
 function handleIncomingUiFrame(frame) {
+    if (isTerminalEventFrame(frame)) {
+        if (frame.status === 'TERMINAL_START') {
+            handleTerminalStart(frame);
+        } else if (frame.status === 'TERMINAL_DATA') {
+            handleTerminalData(frame);
+        } else {
+            handleTerminalEnd(frame);
+        }
+        return;
+    }
+
     switch (frame.type) {
         case 'PROMPT_REQUIRED':
             renderPromptRequiredFrame(frame);
@@ -231,7 +533,7 @@ function handleIncomingUiFrame(frame) {
     }
 }
 
-function renderSessionRecord(msg) {
+function renderSessionRecord(msg, index, messages) {
     if (msg.role === 'PROMPT_REQUIRED') {
         const frame = tryParseJson(msg.content);
         if (frame && isUiEventFrame(frame)) {
@@ -248,8 +550,12 @@ function renderSessionRecord(msg) {
         }
     }
 
-    // Hide raw tool payload records from the visible transcript.
     if (msg.role === 'TOOL') {
+        const transcript = tryGetTerminalTranscript(msg);
+        if (transcript) {
+            const expanded = !hasLaterUserMessage(messages, index);
+            renderTerminalTranscript(msg.uuid, transcript.command, transcript.output, expanded);
+        }
         return;
     }
 
@@ -472,7 +778,9 @@ function connectWebSocket() {
                 const msg = JSON.parse(frame.body);
                 showTyping(false);
                 setInputEnabled(true);
-                if (isUiEventFrame(msg)) {
+                if (isTerminalEventFrame(msg)) {
+                    handleIncomingUiFrame(msg);
+                } else if (isUiEventFrame(msg)) {
                     handleIncomingUiFrame(msg);
                 } else {
                     renderMessage(msg);
@@ -497,7 +805,9 @@ function initSession() {
         .then(function (data) {
             sessionUuid = data.sessionUuid;
             sessionDisplay.textContent = sessionUuid.substring(0, 8) + '\u2026';
-            (data.messages || []).forEach(renderSessionRecord);
+            (data.messages || []).forEach(function (msg, index, messages) {
+                renderSessionRecord(msg, index, messages);
+            });
             connectWebSocket();
             focusMessageInput();
         })
@@ -530,6 +840,7 @@ chatForm.addEventListener('submit', function (e) {
     }
 
     // Render user message immediately (with attachments)
+    collapseCompletedTerminals();
     const attachmentSnapshot = stagedAttachments.slice();
     renderMessage({
         role: 'USER',

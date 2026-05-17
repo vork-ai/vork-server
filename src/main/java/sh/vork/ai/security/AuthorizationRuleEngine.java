@@ -1,6 +1,10 @@
 package sh.vork.ai.security;
 
-import jakarta.annotation.PostConstruct;
+import java.lang.reflect.Method;
+import java.util.List;
+import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
@@ -10,11 +14,7 @@ import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.util.ClassUtils;
 
-import java.lang.reflect.Method;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
+import jakarta.annotation.PostConstruct;
 
 /**
  * Decides whether a given tool invocation requires explicit user authorization before execution.

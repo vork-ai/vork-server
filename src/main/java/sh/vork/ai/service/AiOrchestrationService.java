@@ -39,6 +39,9 @@ import sh.vork.ai.AiProvider;
 public class AiOrchestrationService {
 
     private static final Logger log = LoggerFactory.getLogger(AiOrchestrationService.class);
+        private static final String BACKGROUND_OPERATIONAL_PROTOCOL = """
+BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated background thread. You must perform all necessary analysis and tool calls across multiple message rounds without expecting further human input. Once you have validated that the requested objective is entirely satisfied (e.g., your types compile successfully and records are saved), you MUST invoke the completeBackgroundTask tool to cleanly finalize the run. Do not exit without invoking this tool.
+                        """.stripIndent();
 
         private final Map<AiProvider, ChatClient> registry;
 
@@ -71,7 +74,7 @@ public class AiOrchestrationService {
         String response = base.mutate()
                 .build()
                 .prompt()
-                .user(userPrompt)
+                .user(withBackgroundDirective(userPrompt, provider))
                 .call()
                 .content();
 
@@ -105,7 +108,7 @@ public class AiOrchestrationService {
                 .build()
                 .prompt()
                 .messages(conversationHistory.toArray(Message[]::new))
-                .user(newUserMessage)
+                .user(withBackgroundDirective(newUserMessage, provider))
                 .call()
                 .content();
 
@@ -144,6 +147,7 @@ public class AiOrchestrationService {
 
         List<Message> allMessages = new ArrayList<>(conversationHistory);
         String effectiveText = (userText == null || userText.isBlank()) ? "Please analyse the attached file(s)." : userText;
+        effectiveText = withBackgroundDirective(effectiveText, provider);
         allMessages.add(UserMessage.builder().text(effectiveText).media(media).build());
 
         String response = base.mutate()
@@ -158,5 +162,13 @@ public class AiOrchestrationService {
 
         return response;
     }
+
+        private static String withBackgroundDirective(String text, AiProvider provider) {
+                String baseText = text == null ? "" : text;
+                if (provider != AiProvider.BACKGROUND_SCHEDULER) {
+                        return baseText;
+                }
+                return BACKGROUND_OPERATIONAL_PROTOCOL + "\n\n" + baseText;
+        }
 
 }

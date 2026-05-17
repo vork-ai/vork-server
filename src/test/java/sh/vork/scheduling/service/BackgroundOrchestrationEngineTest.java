@@ -1,0 +1,177 @@
+package sh.vork.scheduling.service;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.util.List;
+import java.util.Map;
+
+import org.junit.jupiter.api.Test;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.messaging.Message;
+import org.springframework.messaging.MessageChannel;
+import org.springframework.messaging.simp.SimpMessagingTemplate;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+
+import sh.vork.ai.AiProvider;
+import sh.vork.ai.entity.AiChatMessage;
+import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.entity.SessionOriginMode;
+import sh.vork.ai.security.ToolSuspensionException;
+import sh.vork.ai.service.AiOrchestrationService;
+import sh.vork.ai.service.ChatService;
+import sh.vork.database.mock.MapDatabaseRepository;
+import sh.vork.scheduling.service.BackgroundOrchestrationEngineTest.TestChatService.Mode;
+
+class BackgroundOrchestrationEngineTest {
+
+    @Test
+    void executeBackgroundTurn_maxRounds_setsFailedMaxRoundsAndStops() {
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+        BackgroundExecutionContext context = new BackgroundExecutionContext();
+        TestChatService chatService = new TestChatService(sessionRepo, context, Mode.NO_OP);
+        BackgroundOrchestrationEngine engine = new BackgroundOrchestrationEngine(chatService, sessionRepo, context);
+
+        String sessionUuid = "bg-max";
+        sessionRepo.save(new AiSession(
+                sessionUuid,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "alice",
+                System.currentTimeMillis(),
+                10,
+                List.of(),
+                AiSessionStatus.RUNNING));
+
+        engine.executeBackgroundTurn(sessionUuid, "initial");
+
+        AiSession saved = sessionRepo.get(sessionUuid);
+        assertNotNull(saved);
+        assertEquals(AiSessionStatus.FAILED_MAX_ROUNDS, saved.status());
+        assertEquals(0, chatService.sendCallCount);
+        assertTrue(saved.messages().stream().anyMatch(m ->
+                "ASSISTANT".equals(m.role()) && m.content().contains("max rounds (10)")));
+    }
+
+    @Test
+    void executeBackgroundTurn_completionFlag_stopsLoop() {
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+        BackgroundExecutionContext context = new BackgroundExecutionContext();
+        TestChatService chatService = new TestChatService(sessionRepo, context, Mode.MARK_COMPLETE);
+        BackgroundOrchestrationEngine engine = new BackgroundOrchestrationEngine(chatService, sessionRepo, context);
+
+        String sessionUuid = "bg-complete";
+        sessionRepo.save(new AiSession(
+                sessionUuid,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "alice",
+                System.currentTimeMillis(),
+                0,
+                List.of(),
+                AiSessionStatus.RUNNING));
+
+        engine.executeBackgroundTurn(sessionUuid, "initial");
+
+        AiSession saved = sessionRepo.get(sessionUuid);
+        assertNotNull(saved);
+        assertEquals(AiSessionStatus.COMPLETED, saved.status());
+        assertEquals(1, chatService.sendCallCount);
+        assertEquals(1, saved.currentRoundCount());
+    }
+
+    @Test
+    void executeBackgroundTurn_suspensionException_exitsWithoutCompletedOrFailed() {
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+        BackgroundExecutionContext context = new BackgroundExecutionContext();
+        TestChatService chatService = new TestChatService(sessionRepo, context, Mode.THROW_SUSPENSION);
+        BackgroundOrchestrationEngine engine = new BackgroundOrchestrationEngine(chatService, sessionRepo, context);
+
+        String sessionUuid = "bg-suspend";
+        sessionRepo.save(new AiSession(
+                sessionUuid,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "alice",
+                System.currentTimeMillis(),
+                0,
+                List.of(),
+                AiSessionStatus.RUNNING));
+
+        engine.executeBackgroundTurn(sessionUuid, "initial");
+
+        AiSession saved = sessionRepo.get(sessionUuid);
+        assertNotNull(saved);
+        assertEquals(AiSessionStatus.RUNNING, saved.status());
+        assertEquals(1, saved.currentRoundCount());
+        assertEquals(1, chatService.sendCallCount);
+    }
+
+    static final class TestChatService extends ChatService {
+        enum Mode {
+            NO_OP,
+            MARK_COMPLETE,
+            THROW_SUSPENSION
+        }
+
+        private final MapDatabaseRepository<AiSession> sessionRepo;
+        private final BackgroundExecutionContext context;
+        private final Mode mode;
+        int sendCallCount;
+
+        TestChatService(MapDatabaseRepository<AiSession> sessionRepo,
+                        BackgroundExecutionContext context,
+                        Mode mode) {
+            super(
+                    sessionRepo,
+                    new AiOrchestrationService(Map.of()),
+                    null,
+                    new SimpMessagingTemplate(new NoOpMessageChannel()),
+                    new ObjectMapper().findAndRegisterModules(),
+                    List.<ToolCallback>of(),
+                    (toolName, arguments, sessionUuid, eventId) -> {
+                    });
+            this.sessionRepo = sessionRepo;
+            this.context = context;
+            this.mode = mode;
+        }
+
+        @Override
+        public AiChatMessage sendMessage(String sessionUuid, String content,
+                                         List<String> attachmentUuids, AiProvider provider) {
+            sendCallCount++;
+            if (mode == Mode.THROW_SUSPENSION) {
+                throw new ToolSuspensionException("compileJavaType", "{}");
+            }
+            if (mode == Mode.MARK_COMPLETE) {
+                AiSession s = sessionRepo.get(sessionUuid);
+                sessionRepo.save(new AiSession(
+                        s.uuid(),
+                        s.provider(),
+                        s.originMode(),
+                        s.username(),
+                        s.createdAt(),
+                        s.currentRoundCount(),
+                        s.messages(),
+                        AiSessionStatus.COMPLETED));
+                context.markExecutionComplete();
+            }
+            return null;
+        }
+    }
+
+    static final class NoOpMessageChannel implements MessageChannel {
+        @Override
+        public boolean send(Message<?> message) {
+            return true;
+        }
+
+        @Override
+        public boolean send(Message<?> message, long timeout) {
+            return true;
+        }
+    }
+}

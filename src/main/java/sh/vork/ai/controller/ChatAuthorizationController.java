@@ -16,15 +16,20 @@ import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -32,10 +37,16 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import sh.vork.ai.AiProvider;
 import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.protocol.UiEventFrame;
 import sh.vork.ai.security.AuthorizationRuleEngine;
 import sh.vork.ai.service.AiOrchestrationService;
+import sh.vork.scheduling.service.AiSchedulerService;
 import sh.vork.database.DatabaseRepository;
+import sh.vork.scheduling.service.SystemBackgroundAuthentication;
+
+import java.util.concurrent.Executor;
 
 /**
  * Accepts structured user responses to PROMPT_REQUIRED frames and resumes chat execution.
@@ -52,33 +63,39 @@ public class ChatAuthorizationController {
     private final SimpMessagingTemplate messaging;
     private final ObjectMapper objectMapper;
     private final Map<String, ToolCallback> toolCallbacksByName;
+    private final Executor aiBackgroundExecutor;
+    private final AiSchedulerService aiSchedulerService;
 
     public ChatAuthorizationController(DatabaseRepository<AiSession> sessionRepo,
                                        AuthorizationRuleEngine authorizationRuleEngine,
                                        AiOrchestrationService aiService,
                                        SimpMessagingTemplate messaging,
-                                           ObjectMapper objectMapper,
-                                           List<ToolCallback> toolCallbacks) {
+                                       ObjectMapper objectMapper,
+                                       List<ToolCallback> toolCallbacks,
+                                       @Qualifier("aiBackgroundExecutor") Executor aiBackgroundExecutor,
+                                       AiSchedulerService aiSchedulerService) {
         this.sessionRepo = sessionRepo;
         this.authorizationRuleEngine = authorizationRuleEngine;
         this.aiService = aiService;
         this.messaging = messaging;
         this.objectMapper = objectMapper;
-                        this.toolCallbacksByName = toolCallbacks.stream().collect(
-                            java.util.stream.Collectors.toMap(
-                                t -> t.getToolDefinition().name(),
-                                Function.identity(),
-                                (a, b) -> a));
+        this.aiBackgroundExecutor = aiBackgroundExecutor;
+        this.aiSchedulerService = aiSchedulerService;
+        this.toolCallbacksByName = toolCallbacks.stream().collect(
+                java.util.stream.Collectors.toMap(
+                        t -> t.getToolDefinition().name(),
+                        Function.identity(),
+                        (a, b) -> a));
     }
 
     @PostMapping("/respond/{sessionUuid}")
-    public UiEventFrame respond(@PathVariable String sessionUuid,
-                                @RequestBody AuthorizationResponseRequest request) {
+    public ResponseEntity<Map<String, Object>> respond(@PathVariable String sessionUuid,
+                                                       @RequestBody AuthorizationResponseRequest request) {
         AiSession session = sessionRepo.get(sessionUuid);
         if (session == null) {
             throw new IllegalStateException("AI session not found: " + sessionUuid);
         }
-        if (!"AWAITING_INPUT".equals(session.status())) {
+        if (session.status() != AiSessionStatus.AWAITING_AUTHORIZATION) {
             throw new IllegalStateException("Session is not awaiting input: " + sessionUuid);
         }
 
@@ -126,6 +143,20 @@ public class ChatAuthorizationController {
                 "fields", fields
             ));
 
+            Map<String, Object> terminalTranscript = extractTerminalTranscript(toolName, toolResponse.responseData());
+            if (terminalTranscript != null) {
+                Map<String, Object> payload = new HashMap<>();
+                payload.put("type", "TOOL_RESPONSE");
+                payload.put("responses", List.of(Map.of(
+                        "id", toolResponse.id(),
+                        "name", toolResponse.name(),
+                        "responseData", toolResponse.responseData())));
+                payload.put("message", toolResponseMessage.toString());
+                payload.put("fields", fields);
+                payload.put("terminalTranscript", terminalTranscript);
+                toolPayloadJson = toJson(payload);
+            }
+
             List<AiChatMessage> updated = new ArrayList<>(session.messages());
             updated.add(new AiChatMessage(
                 UUID.randomUUID().toString(),
@@ -142,40 +173,133 @@ public class ChatAuthorizationController {
             log.debug("Tool response payload: {}", abbreviate(toolPayloadJson, 4000));
 
             List<Message> history = hydrateHistory(updated);
+            SessionOriginMode originMode = session.originMode() == null ? SessionOriginMode.WEB : session.originMode();
+
+            if (originMode == SessionOriginMode.BACKGROUND) {
+                sessionRepo.save(new AiSession(
+                        session.uuid(),
+                        session.provider(),
+                        originMode,
+                        session.username(),
+                        session.createdAt(),
+                    session.currentRoundCount(),
+                        List.copyOf(updated),
+                    AiSessionStatus.RUNNING));
+
+                aiBackgroundExecutor.execute(() -> {
+                    try {
+                        SecurityContextHolder.getContext()
+                                .setAuthentication(new SystemBackgroundAuthentication(session.username()));
+                        aiSchedulerService.resumeBackgroundSession(sessionUuid);
+                    } catch (Exception ex) {
+                        log.error("Background resume failed [session={}]: {}", sessionUuid, ex.getMessage(), ex);
+                    } finally {
+                        SecurityContextHolder.clearContext();
+                    }
+                });
+
+                return ResponseEntity.ok(Map.of(
+                        "status", "BACKGROUND_RESUMED",
+                        "message", "The background task has resumed processing in an isolated thread pool."
+                ));
+            }
+
             log.info("Resuming model call [historyMessages={}]", history.size());
             String finalText = aiService.generateWithHistory(history, "Please continue based on the tool response.",
-                resolveProvider(session.provider()));
+                    resolveProvider(session.provider()));
 
             UiEventFrame textEvent = new UiEventFrame(
-                UUID.randomUUID().toString(),
-                "TEXT_RESPONSE",
-                "CHAT_OUTPUT",
-                Map.of("content", finalText == null ? "" : finalText));
+                    UUID.randomUUID().toString(),
+                    "TEXT_RESPONSE",
+                    "CHAT_OUTPUT",
+                    Map.of("content", finalText == null ? "" : finalText));
 
             updated.add(new AiChatMessage(
-                UUID.randomUUID().toString(),
-                "TEXT_RESPONSE",
-                toJson(textEvent),
-                System.currentTimeMillis(),
-                null,
-                null,
-                null,
-                null));
+                    UUID.randomUUID().toString(),
+                    "TEXT_RESPONSE",
+                    toJson(textEvent),
+                    System.currentTimeMillis(),
+                    null,
+                    null,
+                    null,
+                    null));
 
             sessionRepo.save(new AiSession(
-                session.uuid(),
-                session.provider(),
-                session.createdAt(),
-                List.copyOf(updated),
-                null));
+                    session.uuid(),
+                    session.provider(),
+                    originMode,
+                    session.username(),
+                    session.createdAt(),
+                    session.currentRoundCount(),
+                    List.copyOf(updated),
+                    AiSessionStatus.RUNNING));
 
             log.info("Resumption completed [finalTextLength={}]", finalText == null ? 0 : finalText.length());
             log.debug("Resumption final text: {}", abbreviate(finalText == null ? "" : finalText, 4000));
 
             messaging.convertAndSend("/topic/chat/" + sessionUuid, textEvent);
-            return textEvent;
+            return ResponseEntity.ok(Map.of(
+                    "status", "WEB_RESUMED",
+                    "eventType", textEvent.type(),
+                    "eventId", textEvent.eventId()
+            ));
         }
     }
+
+        @GetMapping("/authorize/{sessionUuid}")
+        public ResponseEntity<Map<String, Object>> authorizeViaLink(@PathVariable String sessionUuid,
+                                     @RequestParam(name = "approved", defaultValue = "false") boolean approved,
+                                     @RequestParam(name = "policy", required = false) String policy,
+                                     @RequestParam(name = "eventId", required = false) String eventId) {
+        String action = approved ? policyToAction(policy) : "DENIED";
+        log.info("Authorization link invoked [session={}, approved={}, policy={}, resolvedAction={}]",
+            sessionUuid, approved, policy, action);
+
+        return respond(sessionUuid,
+            new AuthorizationResponseRequest(
+                eventId,
+                action,
+                Map.of("source", "authorize-link")));
+        }
+
+        @GetMapping("/authorize/{sessionUuid}/pending")
+        public ResponseEntity<Map<String, Object>> pendingAuthorization(@PathVariable String sessionUuid,
+                                        @RequestParam(name = "eventId", required = false) String eventId) {
+        AiSession session = sessionRepo.get(sessionUuid);
+        if (session == null) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of(
+                    "status", "NOT_FOUND",
+                    "message", "AI session not found",
+                    "sessionUuid", sessionUuid));
+        }
+
+        try {
+            AiChatMessage promptMessage = findPromptMessage(session.messages(), eventId);
+            UiEventFrame frame = readEventFrame(promptMessage.content());
+            Map<String, Object> payload = frame.payload() == null ? Map.of() : frame.payload();
+            Object actions = payload.getOrDefault("actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"));
+
+            return ResponseEntity.ok(Map.of(
+                "status", "OK",
+                "sessionUuid", sessionUuid,
+                "sessionStatus", String.valueOf(session.status()),
+                "eventId", frame.eventId(),
+                "toolName", String.valueOf(payload.getOrDefault("toolName", "unknown-tool")),
+                "toolCallId", String.valueOf(payload.getOrDefault("toolCallId", "pending-id")),
+                "reasoning", String.valueOf(payload.getOrDefault("reasoning", "")),
+                "arguments", String.valueOf(payload.getOrDefault("arguments", "{}")),
+                "displayArguments", String.valueOf(payload.getOrDefault("displayArguments", payload.getOrDefault("arguments", "{}"))),
+                "actions", actions));
+        } catch (IllegalStateException ex) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND)
+                .body(Map.of(
+                    "status", "NOT_FOUND",
+                    "message", "No pending authorization prompt found",
+                    "sessionUuid", sessionUuid,
+                    "sessionStatus", String.valueOf(session.status())));
+        }
+        }
 
     private AiChatMessage findPromptMessage(List<AiChatMessage> messages, String eventId) {
         for (int i = messages.size() - 1; i >= 0; i--) {
@@ -270,6 +394,9 @@ public class ChatAuthorizationController {
         switch (action) {
             case "ONCE", "ALLOW_ONCE", "SESSION", "ALLOW_SESSION", "ALWAYS", "ALLOW_ALWAYS" -> {
                 String toolResult = executeTool(toolName, argumentsJson);
+                if ("executeTerminalCommand".equals(toolName)) {
+                    return buildTerminalToolResponse(argumentsJson, toolResult);
+                }
                 // Prefer raw tool JSON if the tool already returns a JSON object.
                 try {
                     objectMapper.readValue(toolResult, new TypeReference<Map<String, Object>>() {});
@@ -299,6 +426,99 @@ public class ChatAuthorizationController {
                 ));
             }
         }
+    }
+
+    private String buildTerminalToolResponse(String argumentsJson, String toolResult) {
+        String command = extractTerminalCommand(argumentsJson);
+        String rawOutput = unwrapTerminalToolResult(toolResult);
+        String displayOutput = normalizeTerminalTranscript(command, rawOutput);
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("status", "COMPLETED");
+        payload.put("command", command);
+        payload.put("rawOutput", rawOutput);
+        payload.put("displayOutput", displayOutput);
+        return toJson(payload);
+    }
+
+    private String unwrapTerminalToolResult(String toolResult) {
+        if (toolResult == null || toolResult.isBlank()) {
+            return "";
+        }
+        try {
+            return objectMapper.readValue(toolResult, String.class);
+        } catch (Exception ignored) {
+        }
+        try {
+            Map<String, Object> payload = objectMapper.readValue(toolResult, new TypeReference<Map<String, Object>>() {});
+            Object result = payload.get("result");
+            if (result != null) {
+                return String.valueOf(result);
+            }
+            Object value = payload.get("value");
+            if (value != null) {
+                return String.valueOf(value);
+            }
+        } catch (Exception ignored) {
+        }
+        return toolResult;
+    }
+
+    private Map<String, Object> extractTerminalTranscript(String toolName, String responseData) {
+        if (!"executeTerminalCommand".equals(toolName) || responseData == null || responseData.isBlank()) {
+            return null;
+        }
+
+        try {
+            Map<String, Object> payload = objectMapper.readValue(responseData, new TypeReference<Map<String, Object>>() {});
+            Object command = payload.get("command");
+            Object displayOutput = payload.get("displayOutput");
+            Object rawOutput = payload.get("rawOutput");
+            if (command == null) {
+                return null;
+            }
+            Map<String, Object> transcript = new HashMap<>();
+            transcript.put("command", String.valueOf(command));
+            transcript.put("output", displayOutput == null ? "" : String.valueOf(displayOutput));
+            transcript.put("rawOutput", rawOutput == null ? "" : String.valueOf(rawOutput));
+            return transcript;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private String extractTerminalCommand(String argumentsJson) {
+        if (argumentsJson == null || argumentsJson.isBlank()) {
+            return "";
+        }
+        try {
+            Map<String, Object> args = objectMapper.readValue(argumentsJson, new TypeReference<Map<String, Object>>() {});
+            Object command = args.get("command");
+            return command == null ? "" : String.valueOf(command);
+        } catch (Exception ex) {
+            return "";
+        }
+    }
+
+    private String normalizeTerminalTranscript(String command, String output) {
+        String normalized = output == null ? "" : output.replace("\r\n", "\n").replace('\r', '\n');
+        if (normalized.isBlank() || command == null || command.isBlank()) {
+            return normalized;
+        }
+
+        while (!normalized.isBlank()) {
+            int newlineIndex = normalized.indexOf('\n');
+            String firstLine = newlineIndex >= 0 ? normalized.substring(0, newlineIndex) : normalized;
+            String firstLineWithoutPrompt = firstLine.replaceFirst("^\\s*[$#>%]\\s*", "").trim();
+            if (!firstLineWithoutPrompt.contains(command)) {
+                break;
+            }
+            if (newlineIndex < 0) {
+                return "";
+            }
+            normalized = normalized.substring(newlineIndex + 1);
+        }
+
+        return normalized;
     }
 
     private String executeTool(String toolName, String argumentsJson) {
@@ -337,6 +557,19 @@ public class ChatAuthorizationController {
         return action.trim().toUpperCase(Locale.ROOT);
     }
 
+    private static String policyToAction(String policy) {
+        if (policy == null || policy.isBlank()) {
+            return "ONCE";
+        }
+
+        return switch (policy.trim().toUpperCase(Locale.ROOT)) {
+            case "ONCE", "ALLOW_ONCE" -> "ONCE";
+            case "SESSION", "ALLOW_SESSION", "TEMPORARY" -> "SESSION";
+            case "ALWAYS", "ALLOW_ALWAYS", "PERMANENT" -> "ALWAYS";
+            default -> "ONCE";
+        };
+    }
+
     private static String resolveUsername() {
         Authentication auth = SecurityContextHolder.getContext().getAuthentication();
         if (auth == null || auth.getName() == null || auth.getName().isBlank()) {
@@ -350,7 +583,8 @@ public class ChatAuthorizationController {
             return AiProvider.GEMINI;
         }
         try {
-            return AiProvider.valueOf(provider.toUpperCase(Locale.ROOT));
+            AiProvider resolved = AiProvider.valueOf(provider.toUpperCase(Locale.ROOT));
+            return resolved == AiProvider.BACKGROUND_SCHEDULER ? AiProvider.GEMINI : resolved;
         } catch (IllegalArgumentException e) {
             return AiProvider.GEMINI;
         }

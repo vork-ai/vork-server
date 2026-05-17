@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 
-import sh.vork.ai.service.AiOrchestrationService;
+import sh.vork.ai.entity.AiSession;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.scheduling.domain.DurationType;
 import sh.vork.scheduling.domain.ScheduledJob;
@@ -30,16 +30,19 @@ class AiSchedulerServiceTest {
         ThreadPoolTaskScheduler scheduler = mock(ThreadPoolTaskScheduler.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
-        AiOrchestrationService ai = mock(AiOrchestrationService.class);
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
+        @SuppressWarnings({"rawtypes"})
         ScheduledFuture future = mock(ScheduledFuture.class);
         when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenReturn(future);
 
-        AiSchedulerService service = new AiSchedulerService(scheduler, repo, ai);
+        AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
         Instant start = Instant.parse("2026-05-17T10:15:30Z");
         ScheduledJob job = new ScheduledJob(
                 "job-1",
+            "Job One",
                 "Do work",
                 "sid-1",
                 "alice",
@@ -64,17 +67,20 @@ class AiSchedulerServiceTest {
         ThreadPoolTaskScheduler scheduler = mock(ThreadPoolTaskScheduler.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
-        AiOrchestrationService ai = mock(AiOrchestrationService.class);
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
+        @SuppressWarnings({"rawtypes"})
         ScheduledFuture future = mock(ScheduledFuture.class);
         when(scheduler.scheduleAtFixedRate(any(Runnable.class), any(Instant.class), any(Duration.class)))
                 .thenReturn(future);
 
-        AiSchedulerService service = new AiSchedulerService(scheduler, repo, ai);
+        AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
         Instant start = Instant.parse("2026-05-17T10:15:30Z");
         ScheduledJob job = new ScheduledJob(
                 "job-2",
+            "Job Two",
                 "Repeat",
                 "sid-2",
                 "bob",
@@ -93,15 +99,18 @@ class AiSchedulerServiceTest {
         ThreadPoolTaskScheduler scheduler = mock(ThreadPoolTaskScheduler.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
-        AiOrchestrationService ai = mock(AiOrchestrationService.class);
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
         @SuppressWarnings({"rawtypes", "unchecked"})
         ScheduledFuture future = mock(ScheduledFuture.class);
         when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenReturn(future);
 
-        AiSchedulerService service = new AiSchedulerService(scheduler, repo, ai);
+        AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
         ScheduledJob job = new ScheduledJob(
                 " ",
+            "Generated Job",
                 "One shot",
                 "sid-3",
                 "charlie",
@@ -126,15 +135,18 @@ class AiSchedulerServiceTest {
         ThreadPoolTaskScheduler scheduler = mock(ThreadPoolTaskScheduler.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<ScheduledJob> repo = mock(DatabaseRepository.class);
-        AiOrchestrationService ai = mock(AiOrchestrationService.class);
+        BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
         @SuppressWarnings({"rawtypes", "unchecked"})
         ScheduledFuture future = mock(ScheduledFuture.class);
         when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenReturn(future);
 
-        AiSchedulerService service = new AiSchedulerService(scheduler, repo, ai);
+        AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
         ScheduledJob existing = new ScheduledJob(
                 "job-3",
+            "Pause Job",
                 "Prompt",
                 "sid-4",
                 "dana",
