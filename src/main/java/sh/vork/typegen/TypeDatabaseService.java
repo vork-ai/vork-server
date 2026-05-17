@@ -3,6 +3,8 @@ package sh.vork.typegen;
 import sh.vork.database.DatabaseEntity;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.database.DatabaseRepositoryFactory;
+import sh.vork.database.SearchQuery;
+import sh.vork.database.SortOrder;
 import org.springframework.stereotype.Service;
 
 import java.util.concurrent.ConcurrentHashMap;
@@ -69,9 +71,81 @@ public class TypeDatabaseService {
         return repositoryFor(entityClass).count();
     }
 
-    // -------------------------------------------------------------------------
-    // Internal
-    // -------------------------------------------------------------------------
+    // ── Search ────────────────────────────────────────────────────────────────
+
+    /**
+     * Returns a lazily-loaded, sorted, paged stream of entities that match all
+     * supplied {@code queries} (AND semantics).
+     * <strong>Must be closed</strong> by the caller (use try-with-resources).
+     */
+    public Stream<Object> search(Class<?> entityClass, int page, int pageSize,
+                                  String sortField, SortOrder sortOrder,
+                                  SearchQuery... queries) {
+        return repositoryFor(entityClass)
+                .search(page, pageSize, sortField, sortOrder, queries)
+                .map(e -> (Object) e);
+    }
+
+    /**
+     * Returns the count of entities matching all supplied {@code queries}.
+     */
+    public long searchCount(Class<?> entityClass, SearchQuery... queries) {
+        return repositoryFor(entityClass).searchCount(queries);
+    }
+
+    /**
+     * Searches using a raw MongoDB JSON filter document.
+     * <strong>Must be closed</strong> by the caller (use try-with-resources).
+     *
+     * @param filterJson a MongoDB filter as a JSON string,
+     *                   e.g. {@code {"status":"active","age":{"$gt":18}}}
+     */
+    public Stream<Object> searchByMongoFilter(Class<?> entityClass, String filterJson,
+                                               int page, int pageSize,
+                                               String sortField, SortOrder sortOrder) {
+        return repositoryFor(entityClass)
+                .searchRaw(page, pageSize, sortField, sortOrder, filterJson)
+                .map(e -> (Object) e);
+    }
+
+    /**
+     * Returns the count of entities that match the supplied raw MongoDB filter.
+     */
+    public long searchCountByMongoFilter(Class<?> entityClass, String filterJson) {
+        return repositoryFor(entityClass).searchCountRaw(filterJson);
+    }
+
+    /**
+     * Searches using a SQL-like WHERE clause (without the {@code WHERE} keyword).
+     * The clause is translated to {@link SearchQuery} predicates via
+     * {@link SqlQueryParser}.
+     *
+     * <p>Examples: {@code "name = 'Alice' AND age > 18"},
+     * {@code "status IN ('active','pending')"},
+     * {@code "address.city = 'London'"}.
+     *
+     * <strong>Must be closed</strong> by the caller (use try-with-resources).
+     *
+     * @throws SqlParseException if the WHERE clause cannot be parsed
+     */
+    public Stream<Object> searchBySql(Class<?> entityClass, String sqlWhere,
+                                       int page, int pageSize,
+                                       String sortField, SortOrder sortOrder) {
+        SearchQuery query = SqlQueryParser.parse(sqlWhere);
+        return search(entityClass, page, pageSize, sortField, sortOrder, query);
+    }
+
+    /**
+     * Returns the count of entities that match the supplied SQL-like WHERE clause.
+     *
+     * @throws SqlParseException if the WHERE clause cannot be parsed
+     */
+    public long searchCountBySql(Class<?> entityClass, String sqlWhere) {
+        SearchQuery query = SqlQueryParser.parse(sqlWhere);
+        return searchCount(entityClass, query);
+    }
+
+    // ── Internal ──────────────────────────────────────────────────────────────
 
     @SuppressWarnings("unchecked")
     private <T extends DatabaseEntity> DatabaseRepository<T> repositoryFor(Class<?> clazz) {

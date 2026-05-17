@@ -12,6 +12,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
+import org.springframework.ai.tool.metadata.ToolMetadata;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -20,12 +21,16 @@ import sh.vork.ai.AiProvider;
 import sh.vork.ai.function.CompileTypeRequest;
 import sh.vork.ai.function.DeleteTypeInstanceRequest;
 import sh.vork.ai.function.GetTypeSchemaRequest;
+import sh.vork.ai.function.ListEnumValuesRequest;
 import sh.vork.ai.function.ListJavaTypesRequest;
 import sh.vork.ai.function.ListTypeInstancesRequest;
 import sh.vork.ai.function.SaveTypeInstanceRequest;
+import sh.vork.ai.function.SearchTypeInstancesRequest;
 import sh.vork.database.DatabaseRepository;
+import sh.vork.database.SortOrder;
 import sh.vork.typegen.JavaType;
 import sh.vork.typegen.JavaTypeClassLoader;
+import sh.vork.typegen.SqlParseException;
 import sh.vork.typegen.TypeDatabaseService;
 import sh.vork.typegen.TypeGenerationException;
 import sh.vork.typegen.TypeGeneratorService;
@@ -266,6 +271,39 @@ public class AiConfig {
     }
 
     /**
+     * {@code listEnumValues} tool — returns all declared constants of an enum
+     * class resolved via {@link JavaTypeClassLoader}.
+     */
+    @Bean
+    public ToolCallback listEnumValues() {
+        return FunctionToolCallback
+                .builder("listEnumValues", (ListEnumValuesRequest req) -> {
+                    try {
+                        Class<?> clazz = typeClassLoader.loadClass(req.fqn());
+                        if (!clazz.isEnum()) {
+                            return "{\"status\":\"error\",\"message\":\"" + req.fqn() + " is not an enum\"}";
+                        }
+                        Object[] constants = clazz.getEnumConstants();
+                        StringBuilder sb = new StringBuilder("{\"fqn\":\"");
+                        sb.append(req.fqn()).append("\",\"values\":[");
+                        for (int i = 0; i < constants.length; i++) {
+                            if (i > 0) sb.append(',');
+                            sb.append('\"').append(constants[i].toString()).append('\"');
+                        }
+                        sb.append("]}");
+                        return sb.toString();
+                    } catch (ClassNotFoundException e) {
+                        return "{\"status\":\"error\",\"message\":\"Type not found: " + req.fqn() + "\"}";
+                    }
+                })
+                .description(
+                        "List all declared constants of an enum by its fully-qualified class name. " +
+                        "Use listJavaTypes to discover available types first.")
+                .inputType(ListEnumValuesRequest.class)
+                .build();
+    }
+
+    /**
      * {@code deleteTypeInstance} tool — deletes a persisted instance by UUID.
      */
     @Bean
@@ -284,6 +322,68 @@ public class AiConfig {
                         "Delete a stored instance of a custom Java type by its UUID. " +
                         "Requires the fully-qualified class name and the instance UUID.")
                 .inputType(DeleteTypeInstanceRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code searchTypeInstances} tool — searches stored instances of a custom Java
+     * type using either a SQL-like WHERE clause or a raw MongoDB filter JSON.
+     */
+    @Bean
+    public ToolCallback searchTypeInstances() {
+        return FunctionToolCallback
+                .builder("searchTypeInstances", (SearchTypeInstancesRequest req) -> {
+                    try {
+                        Class<?> clazz = typeClassLoader.loadClass(req.fqn());
+                        int page      = req.page()     != null ? req.page()     : 0;
+                        int pageSize  = req.pageSize() != null && req.pageSize() > 0
+                                        ? req.pageSize() : 20;
+                        String sortField = req.sortField() != null ? req.sortField() : "uuid";
+                        SortOrder order  = "DESC".equalsIgnoreCase(req.sortOrder())
+                                           ? SortOrder.DESC : SortOrder.ASC;
+                        String queryType = req.queryType() != null
+                                           ? req.queryType().toUpperCase() : "SQL";
+
+                        List<Object> items = new ArrayList<>();
+                        long total;
+
+                        if ("MONGO".equals(queryType)) {
+                            try (var stream = typeDatabaseService.searchByMongoFilter(
+                                    clazz, req.query(), page, pageSize, sortField, order)) {
+                                stream.forEach(items::add);
+                            }
+                            total = typeDatabaseService.searchCountByMongoFilter(clazz, req.query());
+                        } else {
+                            try (var stream = typeDatabaseService.searchBySql(
+                                    clazz, req.query(), page, pageSize, sortField, order)) {
+                                stream.forEach(items::add);
+                            }
+                            total = typeDatabaseService.searchCountBySql(clazz, req.query());
+                        }
+
+                        String resultsJson = objectMapper.writeValueAsString(items);
+                        return "{\"total\":" + total + ",\"page\":" + page
+                                + ",\"pageSize\":" + pageSize + ",\"results\":" + resultsJson + "}";
+                    } catch (ClassNotFoundException e) {
+                        return "{\"status\":\"error\",\"message\":\"Type not found: " + req.fqn() + "\"}";
+                    } catch (SqlParseException e) {
+                        return "{\"status\":\"error\",\"message\":\"SQL parse error: "
+                                + e.getMessage().replace("\"", "'") + "\"}";
+                    } catch (Exception e) {
+                        return "{\"status\":\"error\",\"message\":\""
+                                + e.getMessage().replace("\"", "'") + "\"}";
+                    }
+                })
+                .description(
+                        "Search instances of a custom Java type using either a SQL-like WHERE "
+                        + "clause (queryType: SQL, default) or a raw MongoDB JSON filter "
+                        + "(queryType: MONGO). "
+                        + "SQL examples: \"name = 'Alice'\", \"age > 18 AND active = true\", "
+                        + "\"address.city = 'London'\", \"status IN ('active', 'pending')\", "
+                        + "\"name LIKE '%ali%'\". "
+                        + "MONGO example: {\"status\":\"active\",\"age\":{\"$gt\":18}}. "
+                        + "Supports pagination (page, pageSize) and sorting (sortField, sortOrder).")
+                .inputType(SearchTypeInstancesRequest.class)
                 .build();
     }
 

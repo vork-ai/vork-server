@@ -1,13 +1,18 @@
 package sh.vork.database.mock;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import sh.vork.database.DatabaseEntity;
 import sh.vork.database.DatabaseRepository;
+import sh.vork.database.SearchQuery;
+import sh.vork.database.SortOrder;
 
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -97,6 +102,79 @@ public class MapDatabaseRepository<T extends DatabaseEntity> implements Database
     @Override
     public long count() {
         return store.size();
+    }
+
+    /**
+     * In-memory implementation of {@link DatabaseRepository#search}.
+     *
+     * <p>Each stored entity is deserialised to a {@code Map<String, Object>},
+     * tested against every supplied {@code query} (AND semantics), sorted by
+     * {@code sortField}, paged, and then deserialised to {@code T}.
+     */
+    @Override
+    public Stream<T> search(int page, int pageSize, String sortField, SortOrder sortOrder,
+                             SearchQuery... queries) {
+        Comparator<Map<String, Object>> comparator = mapComparator(sortField, sortOrder);
+
+        List<T> results = store.values().stream()
+                .map(this::toMap)
+                .filter(doc -> matchesAll(doc, queries))
+                .sorted(comparator)
+                .skip((long) page * pageSize)
+                .limit(pageSize)
+                .map(this::fromMap)
+                .toList();
+
+        return results.stream();
+    }
+
+    /** Returns the count of entities that match all supplied {@code queries}. */
+    @Override
+    public long searchCount(SearchQuery... queries) {
+        return store.values().stream()
+                .map(this::toMap)
+                .filter(doc -> matchesAll(doc, queries))
+                .count();
+    }
+
+    // -------------------------------------------------------------------------
+    // Search helpers
+    // -------------------------------------------------------------------------
+
+    private static boolean matchesAll(Map<String, Object> doc, SearchQuery[] queries) {
+        for (SearchQuery q : queries) {
+            if (!q.test(doc)) return false;
+        }
+        return true;
+    }
+
+    private static Comparator<Map<String, Object>> mapComparator(String sortField,
+                                                                   SortOrder sortOrder) {
+        Comparator<Map<String, Object>> c = (a, b) -> {
+            Object av = SearchQuery.normalize(SearchQuery.resolve(a, sortField));
+            Object bv = SearchQuery.normalize(SearchQuery.resolve(b, sortField));
+            if (av == null && bv == null) return 0;
+            if (av == null) return 1;   // nulls last
+            if (bv == null) return -1;
+            return SearchQuery.compareValues(av, bv);
+        };
+        return sortOrder == SortOrder.DESC ? c.reversed() : c;
+    }
+
+    private Map<String, Object> toMap(String json) {
+        try {
+            return mapper.readValue(json, new TypeReference<Map<String, Object>>() {});
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialise entity to map", e);
+        }
+    }
+
+    private T fromMap(Map<String, Object> doc) {
+        try {
+            return mapper.readValue(mapper.writeValueAsString(doc), entityClass);
+        } catch (JsonProcessingException e) {
+            throw new RuntimeException("Failed to deserialise map to " + entityClass.getSimpleName(), e);
+        }
     }
 
     // -------------------------------------------------------------------------

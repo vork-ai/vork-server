@@ -56,4 +56,73 @@ public interface DatabaseRepository<T extends DatabaseEntity> {
      * Returns the total number of documents in the store.
      */
     long count();
+
+    /**
+     * Returns a lazily-loaded stream of entities that match all of the supplied
+     * {@code queries} (combined with AND), sorted by {@code sortField} in the
+     * given {@code sortOrder} and paged with {@code skip/limit}.
+     *
+     * <p>Passing no queries returns all documents (equivalent to {@link #list}).
+     *
+     * <p>The stream <strong>must</strong> be closed after consumption so that
+     * the underlying backend cursor is released. Use try-with-resources.
+     *
+     * @param page      zero-based page index
+     * @param pageSize  maximum number of entities to return
+     * @param sortField document field name to sort by (dot notation supported)
+     * @param sortOrder {@link SortOrder#ASC} or {@link SortOrder#DESC}
+     * @param queries   zero or more predicates; all must match (AND semantics)
+     * @return a closeable {@link Stream} — close it when done
+     */
+    Stream<T> search(int page, int pageSize, String sortField, SortOrder sortOrder,
+                     SearchQuery... queries);
+
+    /**
+     * Returns the total count of entities that match all of the supplied
+     * {@code queries} (combined with AND).
+     *
+     * @param queries zero or more predicates; all must match (AND semantics)
+     * @return number of matching documents
+     */
+    long searchCount(SearchQuery... queries);
+
+    /**
+     * Returns a lazily-loaded stream of entities that match the supplied raw
+     * MongoDB filter JSON, sorted and paged.
+     *
+     * <p>This is intended for use by the AI via the {@code searchTypeInstances}
+     * tool, which can supply a MongoDB query document directly.
+     *
+     * <p><strong>The caller must close this stream.</strong>
+     *
+     * <p>The default implementation throws {@link UnsupportedOperationException}.
+     * Only {@link sh.vork.database.mongo.MongoDBRepository} supports this method;
+     * the in-memory mock does not.
+     *
+     * @param page         zero-based page index
+     * @param pageSize     maximum number of entities to return
+     * @param sortField    document field name to sort by
+     * @param sortOrder    sort direction
+     * @param filterJson   a MongoDB filter document as a JSON string,
+     *                     e.g. {@code {"status":"active","age":{"$gt":18}}}
+     * @return a closeable {@link Stream} — close it when done
+     */
+    default Stream<T> searchRaw(int page, int pageSize, String sortField, SortOrder sortOrder,
+                                String filterJson) {
+        throw new UnsupportedOperationException(
+                "Raw MongoDB filter queries are not supported by this repository implementation");
+    }
+
+    /**
+     * Returns the count of entities that match the supplied raw MongoDB filter JSON.
+     *
+     * <p>The default implementation throws {@link UnsupportedOperationException}.
+     *
+     * @param filterJson a MongoDB filter document as a JSON string
+     * @return number of matching documents
+     */
+    default long searchCountRaw(String filterJson) {
+        throw new UnsupportedOperationException(
+                "Raw MongoDB filter queries are not supported by this repository implementation");
+    }
 }

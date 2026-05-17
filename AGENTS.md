@@ -1024,3 +1024,380 @@ src/main/java/sh/vork/
     └── controller/
         └── TypeDatabaseController.java  ← @RestController; /api/types/{fqn}/…
 ```
+
+---
+
+---
+
+# Vork — Search Query API Reference
+
+## Overview
+
+The Search Query API provides a type-safe, composable predicate system for
+querying any `DatabaseEntity`. It has three entry points:
+
+| Entry point | Best for |
+|---|---|
+| `SearchQuery` factory methods | Java code, programmatic query construction |
+| `SqlQueryParser.parse(sql)` | Human-readable SQL-like WHERE clauses |
+| Raw MongoDB JSON filter | Direct MongoDB expressions |
+
+All three entry points feed into `DatabaseRepository.search()` /
+`TypeDatabaseService.search*()` and the `searchTypeInstances` AI tool.
+
+---
+
+## `SortOrder`
+
+```java
+public enum SortOrder { ASC, DESC }
+```
+
+Used in every search method to control the sort direction of the `sortField`.
+
+---
+
+## `SearchQuery` — Predicate Building Blocks
+
+`SearchQuery` is a **sealed interface** with 13 record implementations.
+All implementations provide:
+- `toMongoFilter()` — the MongoDB `Bson` filter for `MongoDBRepository`
+- `test(Map<String, Object>)` — in-memory evaluation for `MapDatabaseRepository`
+
+### Factory Methods
+
+```java
+// Equality / inequality
+SearchQuery.eq("status", "active")           // field == value
+SearchQuery.ne("status", "deleted")          // field != value
+
+// Comparisons (numeric, string, date as epoch)
+SearchQuery.gt("age", 18)                    // field > value
+SearchQuery.gte("age", 18)                   // field >= value
+SearchQuery.lt("score", 50.0)                // field < value
+SearchQuery.lte("score", 50.0)              // field <= value
+
+// String matching
+SearchQuery.like("name", "ali")              // case-insensitive substring (%ali%)
+SearchQuery.regex("name", "(?i)^al.*")      // full regex pattern
+
+// Membership
+SearchQuery.in("role", "admin", "mod")       // field IN (...)
+SearchQuery.in("score", new int[]{1, 2, 3}) // primitive int[] overload
+SearchQuery.in("ids", myList)               // List<?> overload
+
+// Field presence
+SearchQuery.exists("deletedAt")              // field is present
+SearchQuery.exists("deletedAt", false)       // field is absent (IS NULL)
+SearchQuery.exists("deletedAt", true)        // field is present (IS NOT NULL)
+
+// Logical combinators
+SearchQuery.and(q1, q2)                      // both must match
+SearchQuery.or(q1, q2)                       // either must match
+SearchQuery.not(q)                           // negates q (use with operator predicates)
+```
+
+### Predicate Records
+
+| Record | Fields | MongoDB operator |
+|---|---|---|
+| `Eq(field, value)` | field, value | `$eq` |
+| `Ne(field, value)` | field, value | `$ne` |
+| `Gt(field, value)` | field, value | `$gt` |
+| `Gte(field, value)` | field, value | `$gte` |
+| `Lt(field, value)` | field, value | `$lt` |
+| `Lte(field, value)` | field, value | `$lte` |
+| `Like(field, substring)` | field, substring | `{$regex: "\\Q…\\E", $options:"i"}` |
+| `Regex(field, pattern)` | field, pattern | `{$regex: pattern}` |
+| `In(field, values)` | field, List<?> values | `$in` |
+| `Exists(field, exists)` | field, boolean exists | `$exists` |
+| `And(queries)` | List<SearchQuery> | `$and` |
+| `Or(queries)` | List<SearchQuery> | `$or` |
+| `Not(query)` | SearchQuery query | `$not` |
+
+### Dot Notation for Nested Fields
+
+Use `.` to address fields inside nested records:
+```java
+SearchQuery.eq("address.city", "London")
+SearchQuery.gt("stats.score", 80)
+SearchQuery.like("contact.email", "@example.com")
+```
+
+### Composing Multiple Predicates
+
+Multiple predicates passed to `search()` are **AND-combined** automatically:
+```java
+// Implicit AND — equivalent to an explicit and(...)
+repo.search(0, 20, "name", SortOrder.ASC,
+    SearchQuery.eq("active", true),
+    SearchQuery.gt("age", 18),
+    SearchQuery.like("name", "ali"));
+```
+
+---
+
+## `DatabaseRepository` — Search Methods
+
+```java
+// Filtered + sorted + paged stream
+Stream<T> search(int page, int pageSize, String sortField, SortOrder sortOrder,
+                 SearchQuery... queries);
+
+// Count of matching documents
+long searchCount(SearchQuery... queries);
+
+// Raw MongoDB JSON filter (MongoDBRepository only)
+Stream<T> searchRaw(int page, int pageSize, String sortField, SortOrder sortOrder,
+                    String filterJson);
+
+// Count for raw MongoDB JSON filter
+long searchCountRaw(String filterJson);
+```
+
+`search()` and `searchCount()` are supported by both `MongoDBRepository` and
+`MapDatabaseRepository`. The `searchRaw` / `searchCountRaw` methods are only
+implemented by `MongoDBRepository`; calling them on `MapDatabaseRepository` throws
+`UnsupportedOperationException`.
+
+Streams returned by `search()` and `searchRaw()` are lazy and **must be closed**:
+```java
+try (Stream<Product> stream = repo.search(0, 20, "name", SortOrder.ASC,
+        SearchQuery.eq("active", true))) {
+    List<Product> results = stream.toList();
+}
+```
+
+---
+
+## `SqlQueryParser` — SQL WHERE Clause Parsing
+
+`SqlQueryParser.parse(sql)` converts a SQL WHERE-clause expression (without the
+`WHERE` keyword) into a `SearchQuery`.
+
+### Entry Point
+
+```java
+SearchQuery q = SqlQueryParser.parse("name = 'Alice' AND age > 18");
+```
+
+### Supported Syntax
+
+| Syntax | Example | Maps to |
+|---|---|---|
+| Equality | `name = 'Alice'` | `SearchQuery.eq` |
+| Inequality | `name != 'Bob'`, `name <> 'Bob'` | `SearchQuery.ne` |
+| Comparisons | `age > 18`, `score <= 9.5` | `SearchQuery.gt/gte/lt/lte` |
+| LIKE (substring) | `name LIKE '%ali%'` | `SearchQuery.like` (optimised) |
+| LIKE (prefix) | `name LIKE 'ali%'` | `SearchQuery.regex` |
+| LIKE (suffix) | `name LIKE '%ice'` | `SearchQuery.regex` |
+| LIKE (underscore) | `code LIKE 'A_1'` | `SearchQuery.regex` (`.` for each `_`) |
+| NOT LIKE | `name NOT LIKE '%ali%'` | `SearchQuery.not(like/regex)` |
+| IN | `status IN ('active', 'pending')` | `SearchQuery.in` |
+| NOT IN | `status NOT IN ('banned')` | `SearchQuery.not(in)` |
+| IS NULL | `deletedAt IS NULL` | `SearchQuery.exists(field, false)` |
+| IS NOT NULL | `createdAt IS NOT NULL` | `SearchQuery.exists(field, true)` |
+| AND | `a = 1 AND b = 2` | `SearchQuery.and` |
+| OR | `a = 1 OR b = 2` | `SearchQuery.or` |
+| NOT | `NOT active = false` | `SearchQuery.not` |
+| Grouping | `(a = 1 OR b = 2) AND c = 3` | nested combinators |
+| Boolean literals | `active = true` / `flag = FALSE` | plain `Boolean` value |
+| Null literal | `name = null` | `null` value in `Eq` |
+| Negative numbers | `delta = -5`, `temp = -1.5` | `Integer` / `Double` |
+| Dot notation | `address.city = 'London'` | dotted field path |
+
+**Operator precedence** (high to low): `NOT` → `AND` → `OR`. Parentheses override.
+
+**String literals** must be single-quoted. Escape a literal `'` by doubling: `'it''s fine'`.
+
+**Keywords** (`AND`, `OR`, `NOT`, `LIKE`, `IN`, `IS`, `NULL`, `TRUE`, `FALSE`) are
+case-insensitive.
+
+### LIKE Pattern Translation Details
+
+| SQL pattern | Translation | Notes |
+|---|---|---|
+| `%x%` (no inner wildcards) | `SearchQuery.like(field, x)` | Optimised; uses `$regex: "\\Qx\\E"` with `i` option |
+| `x%` / `%x` / `x` | `SearchQuery.regex(…)` | Anchored regex with `(?i)` prefix |
+| `a_b` | `SearchQuery.regex(…)` | Each `_` → `.` in regex |
+| `%a%b%` | `SearchQuery.regex(…)` | Each `%` → `.*` in regex |
+| Literal `.`, `+`, `(` etc. | `SearchQuery.regex(…)` | Quoted via `Pattern.quote()` |
+
+### Error Handling
+
+Throws `SqlParseException` (a `RuntimeException`) on malformed input:
+```java
+try {
+    SearchQuery q = SqlQueryParser.parse(userInput);
+} catch (SqlParseException e) {
+    // e.getMessage() describes the parse error
+}
+```
+
+---
+
+## `TypeDatabaseService` — Runtime-Type Search Methods
+
+All search methods on `TypeDatabaseService` accept a `Class<?>` (resolved at
+runtime via `JavaTypeClassLoader`) instead of a static type parameter.
+
+```java
+@Autowired TypeDatabaseService typeDatabaseService;
+
+// Search with SearchQuery predicates directly
+try (Stream<Object> s = typeDatabaseService.search(
+        MyRecord.class, 0, 20, "name", SortOrder.ASC,
+        SearchQuery.eq("active", true),
+        SearchQuery.gt("age", 18))) {
+    List<Object> results = s.toList();
+}
+long n = typeDatabaseService.searchCount(MyRecord.class,
+        SearchQuery.eq("active", true));
+
+// Search via SQL WHERE clause
+try (Stream<Object> s = typeDatabaseService.searchBySql(
+        MyRecord.class, "name LIKE '%ali%' AND age > 18",
+        0, 20, "name", SortOrder.ASC)) {
+    List<Object> results = s.toList();
+}
+long n = typeDatabaseService.searchCountBySql(MyRecord.class,
+        "status IN ('active', 'pending')");
+
+// Search via raw MongoDB JSON filter (MongoDBRepository only)
+try (Stream<Object> s = typeDatabaseService.searchByMongoFilter(
+        MyRecord.class, "{\"active\":true,\"age\":{\"$gt\":18}}",
+        0, 20, "name", SortOrder.ASC)) {
+    List<Object> results = s.toList();
+}
+long n = typeDatabaseService.searchCountByMongoFilter(MyRecord.class,
+        "{\"status\":\"active\"}");
+```
+
+### Method Summary
+
+| Method | Description |
+|---|---|
+| `search(class, page, pageSize, sortField, sortOrder, queries...)` | Predicate-based search |
+| `searchCount(class, queries...)` | Count matching predicates |
+| `searchBySql(class, sqlWhere, page, pageSize, sortField, sortOrder)` | SQL WHERE clause |
+| `searchCountBySql(class, sqlWhere)` | Count via SQL WHERE |
+| `searchByMongoFilter(class, filterJson, page, pageSize, sortField, sortOrder)` | Raw MongoDB JSON |
+| `searchCountByMongoFilter(class, filterJson)` | Count via raw MongoDB JSON |
+
+---
+
+## AI Tool — `searchTypeInstances`
+
+Allows the AI to search any runtime-compiled type using either SQL or MongoDB syntax.
+
+**Tool name:** `searchTypeInstances`
+
+### Input Schema (`SearchTypeInstancesRequest`)
+
+| Field | Required | Default | Description |
+|---|---|---|---|
+| `fqn` | ✓ | — | Fully-qualified class name, e.g. `sh.vork.generated.Product` |
+| `query` | ✓ | — | The search expression (SQL or MongoDB JSON depending on `queryType`) |
+| `queryType` | | `SQL` | `SQL` or `MONGO` (case-insensitive) |
+| `sortField` | | `uuid` | Field to sort results by |
+| `sortOrder` | | `ASC` | `ASC` or `DESC` |
+| `page` | | `0` | Zero-based page number |
+| `pageSize` | | `20` | Results per page |
+
+### SQL Query Examples (queryType = SQL)
+
+```
+name = 'Alice'
+age > 18 AND active = true
+status IN ('active', 'pending')
+name LIKE '%ali%'
+address.city = 'London' AND score >= 8.0
+deletedAt IS NULL
+createdAt IS NOT NULL AND name NOT LIKE '%test%'
+(role = 'admin' OR role = 'mod') AND active = true
+```
+
+### MongoDB Query Examples (queryType = MONGO)
+
+```json
+{"status": "active"}
+{"age": {"$gt": 18}, "active": true}
+{"$or": [{"role": "admin"}, {"role": "mod"}]}
+{"name": {"$regex": "ali", "$options": "i"}}
+```
+
+### Response Format
+
+```json
+{
+  "total": 42,
+  "page": 0,
+  "pageSize": 20,
+  "results": [
+    { "uuid": "abc-123", "name": "Alice", "age": 30 },
+    ...
+  ]
+}
+```
+
+On parse or lookup error:
+```json
+{ "status": "error", "message": "Cannot find type: sh.vork.generated.Missing" }
+```
+
+---
+
+## Testing with `MapDatabaseRepository`
+
+`MapDatabaseRepository` supports `search()` and `searchCount()` via in-memory
+`SearchQuery.test()` evaluation. No MongoDB server needed:
+
+```java
+DatabaseRepository<Product> repo = new MapDatabaseRepository<>(Product.class);
+
+repo.save(new Product("1", "Alice Widget", new BigDecimal("9.99"), List.of("sale")));
+repo.save(new Product("2", "Bob Gadget",   new BigDecimal("4.99"), List.of()));
+
+// Predicate search
+try (Stream<Product> s = repo.search(0, 10, "name", SortOrder.ASC,
+        SearchQuery.like("name", "alice"))) {
+    List<Product> found = s.toList();
+    assertEquals(1, found.size());
+}
+
+// Count
+assertEquals(2, repo.searchCount(/* no predicates = all */));
+assertEquals(1, repo.searchCount(SearchQuery.gt("price", 5.0)));
+```
+
+Note: `searchRaw()` / `searchCountRaw()` are **not** supported by
+`MapDatabaseRepository` and throw `UnsupportedOperationException`. Use
+`SqlQueryParser.parse()` + `search()` when testing SQL-like queries in unit tests.
+
+---
+
+## Module Layout
+
+```
+src/main/java/sh/vork/
+├── database/
+│   ├── SearchQuery.java                ← sealed interface + 13 implementations
+│   ├── SortOrder.java                  ← enum: ASC, DESC
+│   ├── DatabaseRepository.java         ← search() / searchCount() / searchRaw() / searchCountRaw()
+│   └── mongo/
+│       └── MongoDBRepository.java      ← full search implementation
+└── typegen/
+    ├── SqlQueryParser.java             ← SQL WHERE → SearchQuery
+    ├── SqlParseException.java          ← thrown on parse failure
+    └── TypeDatabaseService.java        ← search*() / searchBy*() runtime entry points
+
+src/main/java/sh/vork/ai/function/
+    └── SearchTypeInstancesRequest.java ← input schema for searchTypeInstances tool
+
+src/test/java/sh/vork/
+├── database/
+│   ├── SearchQueryTest.java            ← 60 tests (all 13 predicate types + combinators)
+│   └── DatabaseRepositorySearchTest.java ← 108 integration tests (MapDatabaseRepository)
+└── typegen/
+    └── SqlQueryParserTest.java         ← 147 tests (all syntax, LIKE patterns, errors)
+```

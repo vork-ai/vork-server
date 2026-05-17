@@ -62,10 +62,10 @@ public class JavaTypeClassLoader extends ClassLoader {
     }
 
     /**
-     * Package-private constructor for unit tests — allows supplying an explicit
+     * Protected constructor for unit tests — allows supplying an explicit
      * parent class loader without Spring wiring.
      */
-    JavaTypeClassLoader(ClassLoader parent, DatabaseRepository<JavaType> javaTypeRepository) {
+    protected JavaTypeClassLoader(ClassLoader parent, DatabaseRepository<JavaType> javaTypeRepository) {
         super(parent);
         this.repository = javaTypeRepository;
     }

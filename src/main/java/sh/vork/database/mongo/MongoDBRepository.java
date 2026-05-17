@@ -7,11 +7,16 @@ import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.ReplaceOptions;
+import com.mongodb.client.model.Sorts;
 import sh.vork.database.DatabaseEntity;
 import sh.vork.database.DatabaseException;
 import sh.vork.database.DatabaseRepository;
+import sh.vork.database.SearchQuery;
+import sh.vork.database.SortOrder;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 
+import java.util.Arrays;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -113,6 +118,77 @@ public class MongoDBRepository<T extends DatabaseEntity> implements DatabaseRepo
     @Override
     public long count() {
         return collection.countDocuments();
+    }
+
+    @Override
+    public Stream<T> search(int page, int pageSize, String sortField, SortOrder sortOrder,
+                             SearchQuery... queries) {
+        Bson filter = buildFilter(queries);
+        Bson sort   = sortOrder == SortOrder.ASC
+                ? Sorts.ascending(sortField)
+                : Sorts.descending(sortField);
+
+        MongoCursor<Document> cursor = collection
+                .find(filter)
+                .sort(sort)
+                .skip(page * pageSize)
+                .limit(pageSize)
+                .cursor();
+
+        Iterator<T> iterator = new Iterator<>() {
+            @Override public boolean hasNext() { return cursor.hasNext(); }
+            @Override public T next()          { return deserialize(cursor.next()); }
+        };
+
+        return StreamSupport
+                .stream(Spliterators.spliteratorUnknownSize(iterator, Spliterator.ORDERED), false)
+                .onClose(cursor::close);
+    }
+
+    @Override
+    public long searchCount(SearchQuery... queries) {
+        return collection.countDocuments(buildFilter(queries));
+    }
+
+    @Override
+    public Stream<T> searchRaw(int page, int pageSize, String sortField, SortOrder sortOrder,
+                                String filterJson) {
+        Bson filter = Document.parse(filterJson);
+        Bson sort   = sortOrder == SortOrder.ASC
+                ? Sorts.ascending(sortField)
+                : Sorts.descending(sortField);
+
+        MongoCursor<Document> cursor = collection
+                .find(filter)
+                .sort(sort)
+                .skip(page * pageSize)
+                .limit(pageSize)
+                .cursor();
+
+        Iterator<T> iterator = new Iterator<>() {
+            @Override public boolean hasNext() { return cursor.hasNext(); }
+            @Override public T next()          { return deserialize(cursor.next()); }
+        };
+
+        return StreamSupport
+                .stream(Spliterators.spliteratorUnknownSize(iterator, Spliterator.ORDERED), false)
+                .onClose(cursor::close);
+    }
+
+    @Override
+    public long searchCountRaw(String filterJson) {
+        return collection.countDocuments(Document.parse(filterJson));
+    }
+
+    // -------------------------------------------------------------------------
+    // Filter helpers
+    // -------------------------------------------------------------------------
+
+    private static Bson buildFilter(SearchQuery[] queries) {
+        if (queries.length == 0) return new Document();   // empty doc = match all
+        if (queries.length == 1) return queries[0].toMongoFilter();
+        return Filters.and(
+                Arrays.stream(queries).map(SearchQuery::toMongoFilter).toList());
     }
 
     // -------------------------------------------------------------------------

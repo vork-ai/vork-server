@@ -56,11 +56,14 @@ public class ChatController {
 
     @MessageMapping("/chat.send")
     public void handleChatMessage(ChatRequest request) {
-        log.debug("WebSocket message [session={}, length={}]",
-                request.sessionUuid(), request.content() == null ? 0 : request.content().length());
+        log.debug("WebSocket message [session={}, length={}, attachments={}]",
+                request.sessionUuid(),
+                request.content() == null ? 0 : request.content().length(),
+                request.attachmentUuids() == null ? 0 : request.attachmentUuids().size());
         try {
             AiProvider provider = resolveProvider(request.provider());
-            AiChatMessage response = chatService.sendMessage(request.sessionUuid(), request.content(), provider);
+            AiChatMessage response = chatService.sendMessage(
+                    request.sessionUuid(), request.content(), request.attachmentUuids(), provider);
             messaging.convertAndSend("/topic/chat/" + request.sessionUuid(), response);
         } catch (Exception ex) {
             log.error("Chat error [session={}]: {}", request.sessionUuid(), ex.getMessage(), ex);
@@ -68,7 +71,8 @@ public class ChatController {
                     UUID.randomUUID().toString(),
                     "ERROR",
                     "Sorry, something went wrong: " + ex.getMessage(),
-                    System.currentTimeMillis());
+                    System.currentTimeMillis(),
+                    null);
             messaging.convertAndSend("/topic/chat/" + request.sessionUuid(), error);
         }
     }
@@ -89,5 +93,5 @@ public class ChatController {
 
     record SessionResponse(String sessionUuid, List<AiChatMessage> messages) {}
 
-    record ChatRequest(String sessionUuid, String content, String provider) {}
+    record ChatRequest(String sessionUuid, String content, String provider, List<String> attachmentUuids) {}
 }
