@@ -4,10 +4,17 @@ import java.lang.reflect.Method;
 import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
+import java.net.URI;
+import java.net.http.HttpClient;
+import java.net.http.HttpRequest;
+import java.net.http.HttpResponse;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.function.FunctionToolCallback;
@@ -28,9 +35,11 @@ import sh.vork.ai.security.SecuredToolCallback;
 import sh.vork.ai.security.VisualizableToolCallback;
 import sh.vork.ai.function.DeleteTypeInstanceRequest;
 import sh.vork.ai.function.GetTypeSchemaRequest;
+import sh.vork.ai.function.GetURLContentsRequest;
 import sh.vork.ai.function.ListEnumValuesRequest;
 import sh.vork.ai.function.ListJavaTypesRequest;
 import sh.vork.ai.function.ListTypeInstancesRequest;
+import sh.vork.ai.function.LogInfoRequest;
 import sh.vork.ai.function.SaveTypeInstanceRequest;
 import sh.vork.ai.function.SearchTypeInstancesRequest;
 import sh.vork.database.DatabaseRepository;
@@ -64,6 +73,8 @@ import sh.vork.typegen.TypeGeneratorService;
  */
 @Configuration
 public class AiConfig {
+
+    private static final Logger log = LoggerFactory.getLogger(AiConfig.class);
 
     private final JavaTypeClassLoader typeClassLoader;
     private final TypeDatabaseService typeDatabaseService;
@@ -194,6 +205,81 @@ public class AiConfig {
     // -------------------------------------------------------------------------
     // Function-calling tools
     // -------------------------------------------------------------------------
+
+    /**
+     * {@code getURLContents} tool — fetches text content from an HTTP/HTTPS URL.
+     */
+    @Bean
+    public ToolCallback getURLContents() {
+        return FunctionToolCallback
+                .builder("getURLContents", (GetURLContentsRequest req) -> {
+                    String rawUrl = req == null ? null : req.url();
+                    if (rawUrl == null || rawUrl.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"url is required\"}";
+                    }
+
+                    try {
+                        URI uri = URI.create(rawUrl.trim());
+                        String scheme = uri.getScheme();
+                        if (scheme == null || (!"http".equalsIgnoreCase(scheme) && !"https".equalsIgnoreCase(scheme))) {
+                            return "{\"status\":\"error\",\"message\":\"Only http and https URLs are supported\"}";
+                        }
+
+                        HttpRequest request = HttpRequest.newBuilder(uri)
+                                .GET()
+                                .timeout(Duration.ofSeconds(15))
+                                .header("User-Agent", "vork-ai-tool/1.0")
+                                .build();
+
+                        HttpResponse<String> response = HttpClient.newHttpClient()
+                                .send(request, HttpResponse.BodyHandlers.ofString());
+
+                        String content = response.body() == null ? "" : response.body();
+                        if (content.length() > 20000) {
+                            content = content.substring(0, 20000) + "\n...<truncated>";
+                        }
+
+                        return objectMapper.writeValueAsString(Map.of(
+                                "status", "ok",
+                                "url", uri.toString(),
+                                "statusCode", response.statusCode(),
+                                "content", content
+                        ));
+                    } catch (Exception e) {
+                        return "{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}";
+                    }
+                })
+                .description(
+                        """
+                        Fetch text content from an HTTP or HTTPS URL and return the response status and body content.
+                        """
+                                .stripIndent())
+                .inputType(GetURLContentsRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code logInfo} tool — writes a message to server logs at INFO level.
+     */
+    @Bean
+    public ToolCallback logInfo() {
+        return FunctionToolCallback
+                .builder("logInfo", (LogInfoRequest req) -> {
+                    String message = req == null ? null : req.message();
+                    if (message == null || message.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"message is required\"}";
+                    }
+                    log.info("AI logInfo tool message: {}", message);
+                    return "{\"status\":\"ok\"}";
+                })
+                .description(
+                        """
+                        Write a provided message to application logs at INFO level.
+                        """
+                                .stripIndent())
+                .inputType(LogInfoRequest.class)
+                .build();
+    }
 
     /**
      * {@code compileJavaType} tool — compiles a Java type from source code
