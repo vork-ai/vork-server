@@ -1,17 +1,5 @@
 package sh.vork.ssh.command;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sshtools.common.permissions.PermissionDeniedException;
-import com.sshtools.server.vsession.ShellCommand;
-import com.sshtools.server.vsession.VirtualConsole;
-import org.springframework.beans.factory.annotation.Autowired;
-import sh.vork.database.SearchQuery;
-import sh.vork.database.SortOrder;
-import sh.vork.ssh.VirtualCommand;
-import sh.vork.typegen.JavaTypeClassLoader;
-import sh.vork.typegen.SqlParseException;
-import sh.vork.typegen.TypeDatabaseService;
-
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -19,6 +7,19 @@ import java.util.List;
 import java.util.Map;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
+
+import org.springframework.beans.factory.annotation.Autowired;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sshtools.common.permissions.PermissionDeniedException;
+import com.sshtools.server.vsession.ShellCommand;
+import com.sshtools.server.vsession.VirtualConsole;
+
+import sh.vork.database.SortOrder;
+import sh.vork.ssh.VirtualCommand;
+import sh.vork.typegen.JavaTypeClassLoader;
+import sh.vork.typegen.SqlParseException;
+import sh.vork.typegen.TypeDatabaseService;
 
 /**
  * SSH shell command: {@code update}
@@ -187,7 +188,6 @@ public class UpdateCommand extends VirtualCommand {
     }
 
     /** Applies a raw SQL literal to the map field {@code key}. */
-    @SuppressWarnings("unchecked")
     private static void applyValue(Map<String, Object> map, String key, String rawValue) {
         String v = rawValue.trim();
         if ("null".equalsIgnoreCase(v)) {

@@ -7,7 +7,9 @@
     <link rel="icon" type="image/png" href="/images/Vork-Faviconx128.png">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css">
     <link rel="stylesheet" href="/css/chat.css">
+    <link rel="stylesheet" href="/css/console.css">
 </head>
 <body>
 
@@ -15,6 +17,8 @@
 <div id="splash">
     <img src="/images/Vork.png" alt="Vork">
 </div>
+
+<div class="page-layout">
 
 <div class="chat-layout">
 
@@ -26,6 +30,9 @@
             <span id="status-dot" class="status-dot connecting ms-1" title="Connecting&hellip;"></span>
         </div>
         <div class="d-flex align-items-center gap-2">
+            <button id="console-toggle" type="button" class="btn btn-outline-secondary btn-sm console-toggle-btn">
+                <i class="fa-solid fa-terminal"></i> Console
+            </button>
             <select id="provider-select" class="form-select form-select-sm provider-select">
                 <option value="GEMINI" selected>Gemini</option>
                 <option value="OPENAI">OpenAI</option>
@@ -48,9 +55,17 @@
 
     </main>
 
+    <!-- Hidden file input (outside form — not submitted) -->
+    <input type="file" id="file-input" class="d-none" multiple>
+
     <!-- Input area -->
     <div class="chat-input-area">
+        <!-- Attachment preview strip (hidden until files are staged) -->
+        <div id="attachment-strip" class="attachment-strip d-none"></div>
         <form id="chat-form" class="d-flex gap-2 align-items-end">
+            <button type="button" id="upload-files-btn" class="btn btn-secondary attach-btn" title="Attach files">
+                <i class="fa-solid fa-paperclip"></i>
+            </button>
             <textarea
                 id="message-input"
                 class="form-control"
@@ -68,13 +83,29 @@
 
 </div>
 
+<!-- SSH Console panel (hidden until toggled) -->
+<div id="console-panel">
+    <div class="console-bar">
+        <span class="console-title"><i class="fa-solid fa-terminal"></i>&nbsp; SSH Console</span>
+        <button id="console-close" type="button" class="console-close-btn" title="Close console">
+            <i class="fa-solid fa-xmark"></i>
+        </button>
+    </div>
+    <div id="console-terminal"></div>
+</div>
+
+</div><!-- /.page-layout -->
+
 <!-- CDN dependencies -->
 <script src="https://cdn.jsdelivr.net/npm/sockjs-client@1.6.1/dist/sockjs.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@stomp/stompjs@7.0.0/bundles/stomp.umd.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/marked@12.0.0/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js"></script>
 
 <!-- Application -->
 <script src="/js/chat.js"></script>
+<script src="/js/console.js"></script>
 
 </body>
 </html>

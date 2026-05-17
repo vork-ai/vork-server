@@ -57,7 +57,7 @@ class TestServiceFixture {
         }
 
         @Override
-        @SuppressWarnings({"unchecked", "rawtypes"})
+        @SuppressWarnings({"unchecked"})
         public <T extends DatabaseEntity> DatabaseRepository<T> create(Class<T> entityClass) {
             return (DatabaseRepository<T>) repos.computeIfAbsent(
                     entityClass, k -> new MapDatabaseRepository<>((Class<DatabaseEntity>) k));
