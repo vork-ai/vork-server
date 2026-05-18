@@ -21,10 +21,16 @@ let stomp       = null;
 let waiting     = false;
 
 const terminalState = {
-    views: new Map()
+    views: new Map(),
+    pendingByTerminal: new Map(),
+    socketsByTerminal: new Map()
 };
 
 const TERMINAL_ROW_PREFIX = 'terminal-';
+const TERMINAL_REPLAY_MAX_CHARS = 24000;
+const TERMINAL_REPLAY_TAIL_CHARS = 12000;
+const textDecoder = new TextDecoder();
+const textEncoder = new TextEncoder();
 
 // Staged attachments: [{uuid, name, mimeType, aiSupported, chipEl}]
 let stagedAttachments = [];
@@ -58,6 +64,95 @@ function setInputEnabled(on) {
     messageInput.disabled = !on;
     sendBtn.disabled = !on;
     waiting = !on;
+}
+
+function getTerminalWsUrl(terminalId) {
+    const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
+    return proto + window.location.host + '/ws/terminal/' + encodeURIComponent(sessionUuid) + '/' + encodeURIComponent(terminalId);
+}
+
+function closeTerminalSocket(terminalId) {
+    const socket = terminalState.socketsByTerminal.get(terminalId);
+    if (!socket) {
+        return;
+    }
+    try {
+        socket.close();
+    } catch (_) {
+        // no-op
+    }
+    terminalState.socketsByTerminal.delete(terminalId);
+}
+
+function connectTerminalSocket(view) {
+    const terminalId = view && view.terminalId ? view.terminalId : null;
+    if (!terminalId || !sessionUuid) {
+        return null;
+    }
+
+    closeTerminalSocket(terminalId);
+
+    const socket = new WebSocket(getTerminalWsUrl(terminalId));
+    socket.binaryType = 'arraybuffer';
+
+    // Instrumentation for measuring data transfer
+    const stats = {
+        frameCount: 0,
+        totalBytes: 0,
+        minFrameSize: Infinity,
+        maxFrameSize: 0,
+        startTime: Date.now(),
+        lastLogTime: Date.now()
+    };
+
+    socket.onmessage = function (event) {
+        if (!event || !event.data) {
+            return;
+        }
+        if (!view.live) {
+            return;
+        }
+        
+        // Record statistics
+        const frameSize = event.data instanceof ArrayBuffer ? event.data.byteLength : event.data.length;
+        stats.frameCount++;
+        stats.totalBytes += frameSize;
+        stats.minFrameSize = Math.min(stats.minFrameSize, frameSize);
+        stats.maxFrameSize = Math.max(stats.maxFrameSize, frameSize);
+        
+        // Log every 100 frames
+        if (stats.frameCount % 100 === 0) {
+            const now = Date.now();
+            const elapsedMs = now - stats.startTime;
+            const avgFrameSize = Math.floor(stats.totalBytes / stats.frameCount);
+            const throughputKbps = elapsedMs > 0 ? Math.floor((stats.totalBytes * 8) / elapsedMs) : 0;
+            console.log(`[WS-${terminalId.substring(0,8)}] frames=${stats.frameCount}, avg=${avgFrameSize}B, throughput=${throughputKbps}Kbps, min=${stats.minFrameSize}B, max=${stats.maxFrameSize}B`);
+        }
+        
+        if (typeof event.data === 'string') {
+            writeChunkToTerminalView(view, event.data);
+        } else {
+            const chunk = textDecoder.decode(new Uint8Array(event.data));
+            writeChunkToTerminalView(view, chunk);
+        }
+        scrollBottom();
+    };
+
+    socket.onclose = function () {
+        // Final stats log
+        if (stats.frameCount > 0) {
+            const elapsedMs = Date.now() - stats.startTime;
+            const avgFrameSize = Math.floor(stats.totalBytes / stats.frameCount);
+            const throughputKbps = elapsedMs > 0 ? Math.floor((stats.totalBytes * 8) / elapsedMs) : 0;
+            console.log(`[WS-${terminalId.substring(0,8)}] FINAL: frames=${stats.frameCount}, totalBytes=${stats.totalBytes}, avg=${avgFrameSize}B, throughput=${throughputKbps}Kbps, min=${stats.minFrameSize}B, max=${stats.maxFrameSize}B, elapsed=${elapsedMs}ms`);
+        }
+        if (terminalState.socketsByTerminal.get(terminalId) === socket) {
+            terminalState.socketsByTerminal.delete(terminalId);
+        }
+    };
+
+    terminalState.socketsByTerminal.set(terminalId, socket);
+    return socket;
 }
 
 function focusMessageInput() {
@@ -198,6 +293,10 @@ function createTerminalInlineRow(terminalId, command, options) {
         fitAddon: null,
         dataListener: null,
         bufferedText: '',
+        pendingChunks: [],
+        pendingWrite: '',
+        pendingWriteScheduled: false,
+        endReceived: false,
         live: false,
         completed: false,
         expanded: expanded,
@@ -211,6 +310,99 @@ function createTerminalInlineRow(terminalId, command, options) {
     terminalState.views.set(getTerminalViewId(terminalId), view);
     setTerminalExpanded(view, expanded);
     return view;
+}
+
+function getPendingTerminalState(terminalId) {
+    let pending = terminalState.pendingByTerminal.get(terminalId);
+    if (!pending) {
+        pending = {
+            chunks: [],
+            endReceived: false
+        };
+        terminalState.pendingByTerminal.set(terminalId, pending);
+    }
+    return pending;
+}
+
+function applyPendingTerminalState(view) {
+    if (!view) {
+        return;
+    }
+    const pending = terminalState.pendingByTerminal.get(view.terminalId);
+    if (!pending) {
+        return;
+    }
+
+    pending.chunks.forEach(function (chunk) {
+        writeChunkToTerminalView(view, chunk);
+    });
+    if (pending.endReceived) {
+        view.endReceived = true;
+    }
+
+    terminalState.pendingByTerminal.delete(view.terminalId);
+}
+
+function writeChunkToTerminalView(view, chunk) {
+    view.bufferedText += chunk;
+    if (view.terminal) {
+        // Buffer writes and flush quickly with a timer to avoid rAF throttling in background tabs.
+        view.pendingWrite += chunk;
+        if (!view.pendingWriteScheduled) {
+            view.pendingWriteScheduled = true;
+            setTimeout(function () {
+                if (view.terminal && view.pendingWrite) {
+                    view.terminal.write(view.pendingWrite);
+                    view.pendingWrite = '';
+                }
+                view.pendingWriteScheduled = false;
+            }, 8);
+        }
+    } else if (view.passivePre) {
+        view.passivePre.textContent = view.bufferedText || '(no terminal output)';
+    }
+}
+
+function flushTerminalChunks(view) {
+    if (!view || !view.pendingChunks || view.pendingChunks.length === 0) {
+        return;
+    }
+    view.pendingChunks.forEach(function (chunk) {
+        writeChunkToTerminalView(view, chunk);
+    });
+    view.pendingChunks = [];
+}
+
+function maybeFinalizeTerminalView(view) {
+    if (!view || !view.endReceived) {
+        return;
+    }
+
+    // Flush any pending batched writes before disposing the terminal
+    if (view.terminal && view.pendingWrite) {
+        view.terminal.write(view.pendingWrite);
+        view.pendingWrite = '';
+        view.pendingWriteScheduled = false;
+    }
+
+    cleanupTerminalLiveBindings(view);
+    closeTerminalSocket(view.terminalId);
+    if (view.terminal) {
+        view.terminal.dispose();
+        view.terminal = null;
+    }
+    view.fitAddon = null;
+    markTerminalCompleted(view);
+
+    view.passivePre.textContent = view.bufferedText || '(no terminal output)';
+    view.passivePre.classList.remove('d-none');
+    view.xtermContainer.classList.add('d-none');
+    setTerminalExpanded(view, view.expanded);
+
+    if (!hasLiveTerminal()) {
+        setInputEnabled(true);
+        focusMessageInput();
+    }
 }
 
 function setTerminalExpanded(view, expanded) {
@@ -303,6 +495,8 @@ function handleTerminalStart(frame) {
     const view = createTerminalInlineRow(terminalId, command, { expanded: true });
     cleanupTerminalLiveBindings(view);
     view.bufferedText = '';
+    view.pendingChunks = [];
+    view.endReceived = false;
     view.live = true;
     view.completed = false;
 
@@ -337,16 +531,18 @@ function handleTerminalStart(frame) {
         view.bufferedText += '$ ' + command + '\n';
     }
 
+    const socket = connectTerminalSocket(view);
+
     view.dataListener = term.onData(function (data) {
-        if (!stomp || !stomp.connected) {
+        if (!socket || socket.readyState !== WebSocket.OPEN) {
             return;
         }
-        const binary = new TextEncoder().encode(data);
-        stomp.publish({
-            destination: '/app/chat/terminal/input/' + sessionUuid + '/' + terminalId,
-            binaryBody: binary
-        });
+        socket.send(textEncoder.encode(data));
     });
+
+    applyPendingTerminalState(view);
+    flushTerminalChunks(view);
+    maybeFinalizeTerminalView(view);
 
     scrollBottom();
 }
@@ -357,20 +553,21 @@ function handleTerminalData(frame) {
         return;
     }
 
-    const view = findTerminalView(terminalId);
-    if (!view) {
-        return;
-    }
-
     const chunk = frame && typeof frame.chunk === 'string' ? frame.chunk : '';
     if (!chunk) {
         return;
     }
 
-    view.bufferedText += chunk;
-    if (view.terminal) {
-        view.terminal.write(chunk);
+    const view = findTerminalView(terminalId);
+    if (!view) {
+        const pending = getPendingTerminalState(terminalId);
+        pending.chunks.push(chunk);
+        return;
     }
+
+    writeChunkToTerminalView(view, chunk);
+
+    maybeFinalizeTerminalView(view);
     scrollBottom();
 }
 
@@ -385,9 +582,10 @@ function handleTerminalEnd(frame) {
     }
 
     const view = findTerminalView(terminalId);
-    cleanupTerminalLiveBindings(view);
 
     if (!view) {
+        const pending = getPendingTerminalState(terminalId);
+        pending.endReceived = true;
         if (!hasLiveTerminal()) {
             setInputEnabled(true);
             focusMessageInput();
@@ -395,25 +593,12 @@ function handleTerminalEnd(frame) {
         return;
     }
 
-    if (view.terminal) {
-        view.terminal.dispose();
-        view.terminal = null;
-    }
-    view.fitAddon = null;
-    markTerminalCompleted(view);
-
-    view.passivePre.textContent = view.bufferedText || '(no terminal output)';
-    view.passivePre.classList.remove('d-none');
-    view.xtermContainer.classList.add('d-none');
-    setTerminalExpanded(view, view.expanded);
-
-    if (!hasLiveTerminal()) {
-        setInputEnabled(true);
-        focusMessageInput();
-    }
+    view.endReceived = true;
+    flushTerminalChunks(view);
+    maybeFinalizeTerminalView(view);
 }
 
-function renderTerminalTranscript(terminalId, command, output, expanded) {
+function renderTerminalTranscript(terminalId, command, output, expanded, attachment) {
     const view = createTerminalInlineRow(terminalId, command, { expanded: expanded });
     view.bufferedText = output || '';
     view.completed = true;
@@ -421,8 +606,44 @@ function renderTerminalTranscript(terminalId, command, output, expanded) {
     view.xtermContainer.classList.add('d-none');
     view.passivePre.textContent = view.bufferedText || '(no terminal output)';
     view.passivePre.classList.remove('d-none');
+    if (attachment && attachment.uuid) {
+        const download = document.createElement('a');
+        download.className = 'bubble-file-link mt-2 d-inline-block';
+        download.href = '/api/files/' + attachment.uuid;
+        download.download = attachment.name || 'terminal-output.txt';
+        download.target = '_blank';
+        download.innerHTML = '<i class="fa-solid fa-file-lines"></i>' + escapeHtml(attachment.name || 'Download full terminal output');
+        view.passivePre.parentElement.appendChild(download);
+    }
     setTerminalExpanded(view, expanded);
     return view;
+}
+
+function buildReplayOutput(text) {
+    if (!text) {
+        return '(no terminal output)';
+    }
+    if (text.length <= TERMINAL_REPLAY_MAX_CHARS) {
+        return text;
+    }
+    const tail = text.slice(-TERMINAL_REPLAY_TAIL_CHARS);
+    return '[large output truncated; showing tail]\n\n' + tail;
+}
+
+async function loadReplayOutputFromAttachment(attachmentUuid, fallbackOutput) {
+    if (!attachmentUuid) {
+        return buildReplayOutput(fallbackOutput || '');
+    }
+    try {
+        const resp = await fetch('/api/files/' + attachmentUuid, { method: 'GET' });
+        if (!resp.ok) {
+            return buildReplayOutput(fallbackOutput || '');
+        }
+        const text = await resp.text();
+        return buildReplayOutput(text);
+    } catch (_) {
+        return buildReplayOutput(fallbackOutput || '');
+    }
 }
 
 function tryGetTerminalTranscript(msg) {
@@ -436,8 +657,26 @@ function tryGetTerminalTranscript(msg) {
     const transcript = payload.terminalTranscript;
     return {
         command: typeof transcript.command === 'string' ? transcript.command : 'terminal command',
-        output: typeof transcript.output === 'string' ? transcript.output : ''
+        output: typeof transcript.output === 'string' ? transcript.output : '',
+        outputFileUuid: typeof transcript.outputFileUuid === 'string' ? transcript.outputFileUuid : null
     };
+}
+
+async function renderTerminalSessionRecord(msg, index, messages) {
+    const transcript = tryGetTerminalTranscript(msg);
+    if (!transcript) {
+        return false;
+    }
+    const expanded = !hasLaterUserMessage(messages, index);
+    const attachment = Array.isArray(msg.attachments) && msg.attachments.length > 0
+        ? msg.attachments[0]
+        : null;
+    const output = await loadReplayOutputFromAttachment(
+        transcript.outputFileUuid || (attachment ? attachment.uuid : null),
+        transcript.output
+    );
+    renderTerminalTranscript(msg.uuid, transcript.command, output, expanded, attachment);
+    return true;
 }
 
 function renderPromptRequiredFrame(frame) {
@@ -449,6 +688,20 @@ function renderPromptRequiredFrame(frame) {
     const displayArgs = typeof payload.displayArguments === 'string' ? payload.displayArguments : rawArgs;
     const actions = Array.isArray(payload.actions) ? payload.actions : [];
 
+    const previewSource = String(displayArgs || '').trim();
+    const previewLines = previewSource.split(/\r?\n/);
+    const isSingleLinePreview = (previewLines.length === 1)
+        || (previewLines.length === 3 && previewLines[0].startsWith("```") && previewLines[2] === "```");
+    const previewHtml = '<div class="prompt-args">' + marked.parse(displayArgs) + '</div>';
+    const previewSection = isSingleLinePreview
+        ? ('<div class="prompt-args-inline-label">Tool input preview</div>' + previewHtml)
+        : (
+            '<details class="prompt-args-toggle">' +
+            '  <summary>Tool input preview</summary>' +
+            '  ' + previewHtml +
+            '</details>'
+        );
+
     const row = document.createElement('div');
     row.className = 'message-row';
     row.innerHTML =
@@ -456,10 +709,7 @@ function renderPromptRequiredFrame(frame) {
         '<div class="bubble assistant prompt-required">' +
         '  <div class="prompt-title"><i class="fa-solid fa-shield-halved"></i> Authorization Required</div>' +
         '  <div class="prompt-reasoning-body">' + marked.parse(reasoning) + '</div>' +
-        '  <details class="prompt-args-toggle">' +
-        '    <summary>Tool input preview</summary>' +
-        '    <div class="prompt-args">' + marked.parse(displayArgs) + '</div>' +
-        '  </details>' +
+        '  ' + previewSection +
         '  <div class="prompt-actions"></div>' +
         '</div>';
 
@@ -551,11 +801,7 @@ function renderSessionRecord(msg, index, messages) {
     }
 
     if (msg.role === 'TOOL') {
-        const transcript = tryGetTerminalTranscript(msg);
-        if (transcript) {
-            const expanded = !hasLaterUserMessage(messages, index);
-            renderTerminalTranscript(msg.uuid, transcript.command, transcript.output, expanded);
-        }
+        renderTerminalSessionRecord(msg, index, messages);
         return;
     }
 
@@ -776,16 +1022,25 @@ function connectWebSocket() {
             setStatus('connected');
             stomp.subscribe('/topic/chat/' + sessionUuid, function (frame) {
                 const msg = JSON.parse(frame.body);
-                showTyping(false);
-                setInputEnabled(true);
                 if (isTerminalEventFrame(msg)) {
                     handleIncomingUiFrame(msg);
-                } else if (isUiEventFrame(msg)) {
+                    return;
+                }
+
+                showTyping(false);
+                if (!hasLiveTerminal()) {
+                    setInputEnabled(true);
+                }
+
+                if (isUiEventFrame(msg)) {
                     handleIncomingUiFrame(msg);
                 } else {
                     renderMessage(msg);
                 }
-                focusMessageInput();
+
+                if (!hasLiveTerminal()) {
+                    focusMessageInput();
+                }
             });
         },
         onDisconnect: function () { setStatus('disconnected'); },

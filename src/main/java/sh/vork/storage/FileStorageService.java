@@ -65,6 +65,24 @@ public class FileStorageService {
         }
     }
 
+    /**
+     * Uploads bytes from an InputStream directly, without a MultipartFile wrapper.
+     * Used for programmatic uploads like terminal output files.
+     */
+    public StoredFile uploadRaw(InputStream in, String originalName, String mimeType, long sizeBytes) throws IOException {
+        String uuid = UUID.randomUUID().toString();
+        String name = sanitiseName(originalName);
+
+        log.info("Uploading raw file [name={}, mime={}, size={}]", name, mimeType, sizeBytes);
+
+        String storagePath = provider.store(uuid, name, mimeType, in, sizeBytes);
+        StoredFile stored = new StoredFile(uuid, name, mimeType, sizeBytes, storagePath,
+                System.currentTimeMillis());
+        repository.save(stored);
+        log.info("Raw file stored [uuid={}, name={}]", uuid, name);
+        return stored;
+    }
+
     // ── Retrieve ──────────────────────────────────────────────────────────────
 
     /**

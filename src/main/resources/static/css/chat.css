@@ -141,6 +141,12 @@ body {
     max-height: 180px;
 }
 
+.prompt-args-inline-label {
+    margin-top: 0.2rem;
+    color: var(--bs-secondary-color);
+    font-size: 0.86rem;
+}
+
 .prompt-args-toggle {
     margin-top: 0.15rem;
     margin-bottom: 0.35rem;

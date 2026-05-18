@@ -16,12 +16,12 @@ class TerminalInboundControllerTest {
         RecordingRouter router = new RecordingRouter();
         TerminalInboundController controller = new TerminalInboundController(router);
 
-        byte[] payload = new byte[] { 65, 66, 67 };
+        String payload = "ABC";
         controller.handleInput("session-123", payload);
 
         assertEquals("session-123", router.lastSessionUuid);
         assertNull(router.lastTerminalId);
-        assertArrayEquals(payload, router.lastPayload);
+        assertArrayEquals(new byte[] { 65, 66, 67 }, router.lastPayload);
     }
 
     @Test
@@ -29,12 +29,12 @@ class TerminalInboundControllerTest {
         RecordingRouter router = new RecordingRouter();
         TerminalInboundController controller = new TerminalInboundController(router);
 
-        byte[] payload = new byte[] { 68, 69, 70 };
+        String payload = "DEF";
         controller.handleInput("session-456", "terminal-789", payload);
 
         assertEquals("session-456", router.lastSessionUuid);
         assertEquals("terminal-789", router.lastTerminalId);
-        assertArrayEquals(payload, router.lastPayload);
+        assertArrayEquals(new byte[] { 68, 69, 70 }, router.lastPayload);
     }
 
     private static final class RecordingRouter extends TerminalStreamRouter {

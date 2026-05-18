@@ -12,6 +12,7 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -48,6 +49,8 @@ import sh.vork.scheduling.service.SystemBackgroundAuthentication;
 
 import java.util.concurrent.Executor;
 
+import sh.vork.storage.FileStorageService;
+
 /**
  * Accepts structured user responses to PROMPT_REQUIRED frames and resumes chat execution.
  */
@@ -65,7 +68,9 @@ public class ChatAuthorizationController {
     private final Map<String, ToolCallback> toolCallbacksByName;
     private final Executor aiBackgroundExecutor;
     private final AiSchedulerService aiSchedulerService;
+    private final FileStorageService fileStorageService;
 
+    @Autowired
     public ChatAuthorizationController(DatabaseRepository<AiSession> sessionRepo,
                                        AuthorizationRuleEngine authorizationRuleEngine,
                                        AiOrchestrationService aiService,
@@ -73,11 +78,13 @@ public class ChatAuthorizationController {
                                        ObjectMapper objectMapper,
                                        List<ToolCallback> toolCallbacks,
                                        @Qualifier("aiBackgroundExecutor") Executor aiBackgroundExecutor,
-                                       AiSchedulerService aiSchedulerService) {
+                                       AiSchedulerService aiSchedulerService,
+                                       FileStorageService fileStorageService) {
         this.sessionRepo = sessionRepo;
         this.authorizationRuleEngine = authorizationRuleEngine;
         this.aiService = aiService;
         this.messaging = messaging;
+        this.fileStorageService = fileStorageService;
         this.objectMapper = objectMapper;
         this.aiBackgroundExecutor = aiBackgroundExecutor;
         this.aiSchedulerService = aiSchedulerService;
@@ -87,6 +94,25 @@ public class ChatAuthorizationController {
                         Function.identity(),
                         (a, b) -> a));
     }
+
+        public ChatAuthorizationController(DatabaseRepository<AiSession> sessionRepo,
+                           AuthorizationRuleEngine authorizationRuleEngine,
+                           AiOrchestrationService aiService,
+                           SimpMessagingTemplate messaging,
+                           ObjectMapper objectMapper,
+                           List<ToolCallback> toolCallbacks,
+                           @Qualifier("aiBackgroundExecutor") Executor aiBackgroundExecutor,
+                           AiSchedulerService aiSchedulerService) {
+        this(sessionRepo,
+            authorizationRuleEngine,
+            aiService,
+            messaging,
+            objectMapper,
+            toolCallbacks,
+            aiBackgroundExecutor,
+            aiSchedulerService,
+            null);
+        }
 
     @PostMapping("/respond/{sessionUuid}")
     public ResponseEntity<Map<String, Object>> respond(@PathVariable String sessionUuid,
@@ -144,6 +170,8 @@ public class ChatAuthorizationController {
             ));
 
             Map<String, Object> terminalTranscript = extractTerminalTranscript(toolName, toolResponse.responseData());
+            List<AiChatMessage.AttachmentRef> attachments = null;
+            
             if (terminalTranscript != null) {
                 Map<String, Object> payload = new HashMap<>();
                 payload.put("type", "TOOL_RESPONSE");
@@ -155,6 +183,23 @@ public class ChatAuthorizationController {
                 payload.put("fields", fields);
                 payload.put("terminalTranscript", terminalTranscript);
                 toolPayloadJson = toJson(payload);
+                
+                // Extract file attachment if present
+                Object fileUuidObj = terminalTranscript.get("outputFileUuid");
+                if (fileUuidObj != null && fileStorageService != null) {
+                    String fileUuid = String.valueOf(fileUuidObj);
+                    sh.vork.storage.StoredFile storedFile = fileStorageService.getMetadata(fileUuid);
+                    if (storedFile != null) {
+                        attachments = List.of(
+                            new AiChatMessage.AttachmentRef(
+                                storedFile.uuid(),
+                                storedFile.originalName(),
+                                storedFile.mimeType()
+                            )
+                        );
+                        log.info("Terminal output file attached [fileUuid={}, fileName={}]", fileUuid, storedFile.originalName());
+                    }
+                }
             }
 
             List<AiChatMessage> updated = new ArrayList<>(session.messages());
@@ -163,7 +208,7 @@ public class ChatAuthorizationController {
                 "TOOL",
                 toolPayloadJson,
                 System.currentTimeMillis(),
-                null,
+                attachments,
                 null,
                 toolCallId,
                 toolName));
@@ -437,6 +482,18 @@ public class ChatAuthorizationController {
         payload.put("command", command);
         payload.put("rawOutput", rawOutput);
         payload.put("displayOutput", displayOutput);
+        
+        // Extract file UUID from tool result if present
+        try {
+            Map<String, Object> toolResultObj = objectMapper.readValue(toolResult, new TypeReference<Map<String, Object>>() {});
+            Object fileUuid = toolResultObj.get("outputFileUuid");
+            if (fileUuid != null) {
+                payload.put("outputFileUuid", String.valueOf(fileUuid));
+            }
+        } catch (Exception ignored) {
+            // Not a JSON object or doesn't have file UUID, continue
+        }
+        
         return toJson(payload);
     }
 
@@ -450,6 +507,10 @@ public class ChatAuthorizationController {
         }
         try {
             Map<String, Object> payload = objectMapper.readValue(toolResult, new TypeReference<Map<String, Object>>() {});
+            Object output = payload.get("output");
+            if (output != null) {
+                return String.valueOf(output);
+            }
             Object result = payload.get("result");
             if (result != null) {
                 return String.valueOf(result);
@@ -458,6 +519,8 @@ public class ChatAuthorizationController {
             if (value != null) {
                 return String.valueOf(value);
             }
+            // New file-backed terminal responses may carry no inline output.
+            return "";
         } catch (Exception ignored) {
         }
         return toolResult;
@@ -480,6 +543,13 @@ public class ChatAuthorizationController {
             transcript.put("command", String.valueOf(command));
             transcript.put("output", displayOutput == null ? "" : String.valueOf(displayOutput));
             transcript.put("rawOutput", rawOutput == null ? "" : String.valueOf(rawOutput));
+            
+            // Include file UUID if present
+            Object fileUuid = payload.get("outputFileUuid");
+            if (fileUuid != null) {
+                transcript.put("outputFileUuid", String.valueOf(fileUuid));
+            }
+            
             return transcript;
         } catch (Exception ex) {
             return null;

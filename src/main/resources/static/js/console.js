@@ -15,6 +15,8 @@
     var fitAddon = null;
     var ws       = null;
     var panel    = null;
+    var pendingWrite = '';  // Buffer for batching writes
+    var writeScheduled = false;
 
     // ── Init ──────────────────────────────────────────────────────────────────
 
@@ -81,19 +83,45 @@
         });
 
         ws.addEventListener('message', function (event) {
+            var data;
             if (typeof event.data === 'string') {
-                terminal.write(event.data);
+                data = event.data;
             } else {
                 // ArrayBuffer — convert to string
-                terminal.write(new Uint8Array(event.data));
+                data = new TextDecoder().decode(new Uint8Array(event.data));
+            }
+            
+            // Buffer the data and flush quickly via timer to avoid rAF throttling.
+            pendingWrite += data;
+            if (!writeScheduled) {
+                writeScheduled = true;
+                setTimeout(function () {
+                    if (pendingWrite && terminal) {
+                        terminal.write(pendingWrite);
+                        pendingWrite = '';
+                    }
+                    writeScheduled = false;
+                }, 8);
             }
         });
 
         ws.addEventListener('close', function () {
+            // Flush any pending writes before writing the close message
+            if (pendingWrite && terminal) {
+                terminal.write(pendingWrite);
+                pendingWrite = '';
+                writeScheduled = false;
+            }
             terminal.writeln('\r\n\x1b[31mSession closed.\x1b[0m');
         });
 
         ws.addEventListener('error', function () {
+            // Flush any pending writes before writing the error message
+            if (pendingWrite && terminal) {
+                terminal.write(pendingWrite);
+                pendingWrite = '';
+                writeScheduled = false;
+            }
             terminal.writeln('\r\n\x1b[31mWebSocket error — console unavailable.\x1b[0m');
         });
 

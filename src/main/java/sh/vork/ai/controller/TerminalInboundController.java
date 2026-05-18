@@ -1,5 +1,7 @@
 package sh.vork.ai.controller;
 
+import java.nio.charset.StandardCharsets;
+
 import org.springframework.messaging.handler.annotation.DestinationVariable;
 import org.springframework.messaging.handler.annotation.MessageMapping;
 import org.springframework.stereotype.Controller;
@@ -16,14 +18,21 @@ public class TerminalInboundController {
     }
 
     @MessageMapping("/chat/terminal/input/{sessionUuid}")
-    public void handleInput(@DestinationVariable String sessionUuid, byte[] payload) {
-        terminalStreamRouter.writeInput(sessionUuid, payload);
+    public void handleInput(@DestinationVariable String sessionUuid, String payload) {
+        terminalStreamRouter.writeInput(sessionUuid, toPayloadBytes(payload));
     }
 
     @MessageMapping("/chat/terminal/input/{sessionUuid}/{terminalId}")
     public void handleInput(@DestinationVariable String sessionUuid,
                             @DestinationVariable String terminalId,
-                            byte[] payload) {
-        terminalStreamRouter.writeInput(sessionUuid, terminalId, payload);
+                            String payload) {
+        terminalStreamRouter.writeInput(sessionUuid, terminalId, toPayloadBytes(payload));
+    }
+
+    private static byte[] toPayloadBytes(String payload) {
+        if (payload == null || payload.isEmpty()) {
+            return new byte[0];
+        }
+        return payload.getBytes(StandardCharsets.UTF_8);
     }
 }

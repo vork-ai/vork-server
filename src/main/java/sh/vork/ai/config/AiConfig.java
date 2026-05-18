@@ -278,7 +278,7 @@ public class AiConfig {
             @Bean
             @Restricted
             public ToolCallback executeTerminalCommand(ExecuteTerminalCommandTool terminalTool) {
-            return FunctionToolCallback
+            ToolCallback delegate = FunctionToolCallback
                 .builder("executeTerminalCommand", terminalTool::execute)
                 .description(
                     """
@@ -287,6 +287,8 @@ public class AiConfig {
                         .stripIndent())
                 .inputType(ExecuteTerminalCommandRequest.class)
                 .build();
+
+            return new VisualizableToolCallback(delegate, terminalTool::formatAuthorizationDetails);
             }
 
     /**

@@ -13,6 +13,7 @@ import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.messaging.simp.SimpMessagingTemplate;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +24,7 @@ import com.sshtools.client.shell.ShellProcess;
 import com.sshtools.common.ssh.SshException;
 
 import sh.vork.ai.entity.SessionOriginMode;
+import sh.vork.ai.websocket.TerminalBinarySocketRegistry;
 import sh.vork.ssh.VirtualSshService;
 
 @Service
@@ -34,14 +36,26 @@ public class TerminalStreamRouter {
 
     private final VirtualSshService virtualSshService;
     private final SimpMessagingTemplate messagingTemplate;
+    private final TerminalOutputStore terminalOutputStore;
+    private final TerminalBinarySocketRegistry terminalBinarySocketRegistry;
 
     private final Map<String, ActiveTerminalSession> sessionsByCompositeKey = new ConcurrentHashMap<>();
     private final Map<String, ActiveTerminalSession> sessionsBySessionUuid = new ConcurrentHashMap<>();
 
+    @Autowired
     public TerminalStreamRouter(VirtualSshService virtualSshService,
-                                SimpMessagingTemplate messagingTemplate) {
+                                SimpMessagingTemplate messagingTemplate,
+                                TerminalOutputStore terminalOutputStore,
+                                TerminalBinarySocketRegistry terminalBinarySocketRegistry) {
         this.virtualSshService = virtualSshService;
         this.messagingTemplate = messagingTemplate;
+        this.terminalOutputStore = terminalOutputStore;
+        this.terminalBinarySocketRegistry = terminalBinarySocketRegistry;
+    }
+
+    public TerminalStreamRouter(VirtualSshService virtualSshService,
+                                SimpMessagingTemplate messagingTemplate) {
+        this(virtualSshService, messagingTemplate, null, null);
     }
 
     public String executeStreamedCommand(String sessionUuid,
@@ -49,12 +63,14 @@ public class TerminalStreamRouter {
                                          String command,
                                          SessionOriginMode originMode) {
         ActiveTerminalSession session = getOrCreateShell(sessionUuid, host);
-        StringBuilder accumulatedLog = new StringBuilder();
+        TerminalOutputStore.TerminalOutputWriter outputWriter = terminalOutputStore == null
+            ? null
+            : terminalOutputStore.createWriter(sessionUuid, command);
+        StringBuilder fallbackOutput = outputWriter == null ? new StringBuilder() : null;
         String terminalId = UUID.randomUUID().toString();
-        boolean emittedDisplayableChunk = false;
         ShellProcess process;
 
-        if (originMode == SessionOriginMode.WEB) {
+        if (originMode == SessionOriginMode.WEB && messagingTemplate != null) {
             messagingTemplate.convertAndSend("/topic/chat/" + sessionUuid,
                     Map.of("type", "EVENT", "status", "TERMINAL_START", "command", command, "terminalId", terminalId));
         }
@@ -67,66 +83,114 @@ public class TerminalStreamRouter {
             } catch (SshException | IOException ex) {
                 throw new IllegalStateException("Failed to start terminal command stream", ex);
             }
+        }
 
-            try (InputStream stdout = process.getInputStream()) {
-                byte[] buffer = new byte[BUFFER_SIZE];
-                while (true) {
-                    int bytesRead = stdout.read(buffer);
-                    if (bytesRead == -1) {
-                        break;
-                    }
-                    if (bytesRead == 0) {
-                        if (!process.isActive()) {
-                            break;
-                        }
-                        continue;
-                    }
+        // Stream stats for instrumentation
+        long streamStartTime = System.currentTimeMillis();
+        long frameCount = 0;
+        long totalBytes = 0;
 
-                    byte[] rawPayload = Arrays.copyOf(buffer, bytesRead);
-                    String chunk = new String(rawPayload, StandardCharsets.UTF_8);
-                    accumulatedLog.append(chunk);
-
-                    if (originMode == SessionOriginMode.WEB) {
-                        messagingTemplate.convertAndSend("/topic/chat/" + sessionUuid,
-                                Map.of(
-                                        "type", "EVENT",
-                                        "status", "TERMINAL_DATA",
-                                        "terminalId", terminalId,
-                                        "chunk", chunk));
-                        if (hasDisplayableContent(chunk)) {
-                            emittedDisplayableChunk = true;
-                        }
-                    }
-
-                    if (!process.isActive() && stdout.available() == 0) {
-                        break;
-                    }
+        try (InputStream stdout = process.getInputStream()) {
+            byte[] buffer = new byte[BUFFER_SIZE];
+            while (true) {
+                int bytesRead = stdout.read(buffer);
+                if (bytesRead == -1) {
+                    break;
                 }
-                process.waitFor();
-            } catch (IOException ex) {
-                throw new RuntimeException("Terminal execution stream broken", ex);
-            } finally {
+                if (bytesRead == 0) {
+                    if (!process.isActive()) {
+                        break;
+                    }
+                    continue;
+                }
+
+                byte[] payload = Arrays.copyOf(buffer, bytesRead);
+                String chunk = new String(payload, StandardCharsets.UTF_8);
+
+                frameCount++;
+                totalBytes += bytesRead;
+
+                if (outputWriter != null) {
+                    try {
+                        outputWriter.write(chunk);
+                        outputWriter.flush();
+                    } catch (IOException ex) {
+                        log.warn("Failed to write terminal output to file: {}", ex.getMessage());
+                    }
+                } else {
+                    fallbackOutput.append(chunk);
+                }
+
+                if (originMode == SessionOriginMode.WEB && terminalBinarySocketRegistry != null) {
+                    terminalBinarySocketRegistry.broadcast(sessionUuid, terminalId, payload);
+                } else if (originMode == SessionOriginMode.WEB && messagingTemplate != null) {
+                    messagingTemplate.convertAndSend("/topic/chat/" + sessionUuid,
+                            Map.of(
+                                    "type", "EVENT",
+                                    "status", "TERMINAL_DATA",
+                                    "terminalId", terminalId,
+                                    "chunk", chunk));
+                }
+
+                if (!process.isActive() && stdout.available() == 0) {
+                    break;
+                }
+            }
+            process.waitFor();
+            
+            // Final stream stats
+            long elapsedMs = System.currentTimeMillis() - streamStartTime;
+            long avgFrameSize = frameCount > 0 ? totalBytes / frameCount : 0;
+            long throughputKbps = elapsedMs > 0 ? (totalBytes * 8) / elapsedMs : 0;
+            log.info("Shell stream COMPLETED [session={}, terminal={}]: frames={}, totalBytes={}, avgSize={} bytes, throughput={}Kbps, elapsed={}ms",
+                    sessionUuid, terminalId, frameCount, totalBytes, avgFrameSize, throughputKbps, elapsedMs);
+        } catch (IOException ex) {
+            throw new RuntimeException("Terminal execution stream broken", ex);
+        } finally {
+            synchronized (session.lock()) {
                 session.clearActiveProcess();
             }
         }
 
-
-        if (originMode == SessionOriginMode.WEB) {
-            String uiOutput = selectUiOutput(command, accumulatedLog.toString());
-                if (!emittedDisplayableChunk && !uiOutput.isBlank()) {
-                messagingTemplate.convertAndSend("/topic/chat/" + sessionUuid,
-                        Map.of(
-                                "type", "EVENT",
-                                "status", "TERMINAL_DATA",
-                                "terminalId", terminalId,
-                                "chunk", uiOutput));
+        // Finalize output file and get the stored file UUID
+        String outputFileUuid = null;
+        if (terminalOutputStore != null && outputWriter != null) {
+            try {
+                sh.vork.storage.StoredFile storedFile = terminalOutputStore.finalize(outputWriter);
+                if (storedFile != null) {
+                    outputFileUuid = storedFile.uuid();
+                    log.info("Terminal output file stored [command={}, uuid={}]", command, outputFileUuid);
+                }
+            } catch (Exception ex) {
+                log.error("Failed to finalize terminal output file: {}", ex.getMessage(), ex);
             }
-            messagingTemplate.convertAndSend("/topic/chat/" + sessionUuid,
-                    Map.of("type", "EVENT", "status", "TERMINAL_END", "terminalId", terminalId));
         }
 
-        log.info(accumulatedLog.toString());
-        return sanitizeForModel(accumulatedLog.toString());
+        if (originMode == SessionOriginMode.WEB && messagingTemplate != null) {
+            messagingTemplate.convertAndSend("/topic/chat/" + sessionUuid,
+                    Map.of(
+                            "type", "EVENT",
+                            "status", "TERMINAL_END",
+                    "terminalId", terminalId));
+        }
+
+        // Return JSON response with file UUID (if available) for tool response
+        Map<String, Object> response = new java.util.HashMap<>();
+        response.put("status", "COMPLETED");
+        response.put("command", command);
+        if (outputFileUuid != null) {
+            response.put("outputFileUuid", outputFileUuid);
+        }
+        if (fallbackOutput != null) {
+            response.put("output", sanitizeForModel(fallbackOutput.toString()));
+        }
+        
+        try {
+            return new com.fasterxml.jackson.databind.ObjectMapper().writeValueAsString(response);
+        } catch (Exception ex) {
+            log.error("Failed to serialize terminal response: {}", ex.getMessage());
+            return sanitizeForModel("");
+        }
     }
 
     public void writeInput(String sessionUuid, byte[] payload) {
