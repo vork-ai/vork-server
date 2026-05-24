@@ -415,17 +415,9 @@ body.sidebar-collapsed .sidebar-top {
 .terminal-stream-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-end;
     gap: 0.75rem;
     margin-bottom: 0.45rem;
-}
-
-.terminal-stream-title {
-    font-weight: 600;
-    min-width: 0;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
 }
 
 .terminal-stream-toggle {
@@ -461,7 +453,8 @@ body.sidebar-collapsed .sidebar-top {
 }
 
 .terminal-stream-xterm {
-    min-height: 220px;
+    min-height: 0;
+    height: 220px;
     padding: 0.25rem;
 }
 
@@ -474,6 +467,10 @@ body.sidebar-collapsed .sidebar-top {
     background: #101724;
     font-size: 0.82rem;
     line-height: 1.45;
+}
+
+.terminal-stream-row.terminal-collapsed .terminal-stream-passive {
+    overflow: hidden;
 }
 
 .bubble p:last-child {

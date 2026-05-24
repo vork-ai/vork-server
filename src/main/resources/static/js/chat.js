@@ -38,8 +38,10 @@ const terminalState = {
 const TERMINAL_ROW_PREFIX = 'terminal-';
 const TERMINAL_REPLAY_MAX_CHARS = 24000;
 const TERMINAL_REPLAY_TAIL_CHARS = 12000;
+const TERMINAL_COLLAPSED_HEIGHT = '1.6rem';
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
+const ANSI_ESCAPE_PATTERN = /\u001B\[[0-9;?]*[ -/]*[@-~]/g;
 
 // Staged attachments: [{uuid, name, mimeType, aiSupported, chipEl}]
 let stagedAttachments = [];
@@ -323,8 +325,7 @@ function createTerminalInlineRow(terminalId, command, options) {
     row.innerHTML =
         '<div class="bubble assistant terminal-stream-bubble">' +
         '  <div class="terminal-stream-header">' +
-        '    <div class="terminal-stream-title"><i class="fa-solid fa-terminal"></i> <code>' + escapeHtml(command || 'Live Terminal Stream') + '</code></div>' +
-        '    <button type="button" class="terminal-stream-toggle" aria-label="Hide output" title="Hide output">' +
+        '    <button type="button" class="terminal-stream-toggle" aria-label="Collapse output" title="Collapse output">' +
         '      <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>' +
         '    </button>' +
         '  </div>' +
@@ -397,6 +398,24 @@ function applyPendingTerminalState(view) {
     terminalState.pendingByTerminal.delete(view.terminalId);
 }
 
+function normalizeTerminalTranscriptForPre(text) {
+    if (!text) {
+        return '';
+    }
+    let normalized = String(text);
+    normalized = normalized.replace(/\r\n/g, '\n');
+    normalized = normalized.replace(/\r/g, '\n');
+    normalized = normalized.replace(ANSI_ESCAPE_PATTERN, '');
+    normalized = normalized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
+    return normalized;
+}
+
+function buildPassiveTranscript(view) {
+    const normalized = normalizeTerminalTranscriptForPre(view && view.bufferedText ? view.bufferedText : '');
+    const commandPrefix = (view && view.command) ? ('$ ' + view.command + '\n') : '';
+    return (commandPrefix + normalized) || '(no terminal output)';
+}
+
 function writeChunkToTerminalView(view, chunk) {
     view.bufferedText += chunk;
     if (view.terminal) {
@@ -448,7 +467,7 @@ function maybeFinalizeTerminalView(view) {
     view.fitAddon = null;
     markTerminalCompleted(view);
 
-    view.passivePre.textContent = view.bufferedText || '(no terminal output)';
+    view.passivePre.textContent = buildPassiveTranscript(view);
     view.passivePre.classList.remove('d-none');
     view.xtermContainer.classList.add('d-none');
     setTerminalExpanded(view, view.expanded);
@@ -464,7 +483,23 @@ function setTerminalExpanded(view, expanded) {
         return;
     }
     view.expanded = !!expanded;
-    view.body.classList.toggle('d-none', !view.expanded);
+    view.row.classList.toggle('terminal-collapsed', !view.expanded);
+
+    if (view.xtermContainer) {
+        view.xtermContainer.style.height = view.expanded ? '220px' : TERMINAL_COLLAPSED_HEIGHT;
+    }
+    if (view.passivePre) {
+        view.passivePre.style.maxHeight = view.expanded ? '320px' : TERMINAL_COLLAPSED_HEIGHT;
+    }
+
+    if (view.fitAddon && view.terminal && view.xtermContainer && !view.xtermContainer.classList.contains('d-none')) {
+        setTimeout(function () {
+            if (view.fitAddon && view.terminal) {
+                view.fitAddon.fit();
+            }
+        }, 0);
+    }
+
     if (view.toggleBtn) {
         const icon = view.toggleBtn.querySelector('i');
         if (icon) {
@@ -472,7 +507,7 @@ function setTerminalExpanded(view, expanded) {
                 ? 'fa-solid fa-chevron-up'
                 : 'fa-solid fa-chevron-down';
         }
-        const label = view.expanded ? 'Hide output' : 'Show output';
+        const label = view.expanded ? 'Collapse output' : 'Expand output';
         view.toggleBtn.setAttribute('aria-label', label);
         view.toggleBtn.setAttribute('title', label);
         view.toggleBtn.setAttribute('aria-expanded', String(view.expanded));
@@ -581,11 +616,6 @@ function handleTerminalStart(frame) {
         view.fitAddon.fit();
     }
 
-    if (command) {
-        term.writeln('$ ' + command);
-        view.bufferedText += '$ ' + command + '\n';
-    }
-
     const socket = connectTerminalSocket(view);
 
     view.dataListener = term.onData(function (data) {
@@ -661,7 +691,7 @@ function renderTerminalTranscript(terminalId, command, output, expanded, attachm
     view.completed = true;
     view.live = false;
     view.xtermContainer.classList.add('d-none');
-    view.passivePre.textContent = view.bufferedText || '(no terminal output)';
+    view.passivePre.textContent = buildPassiveTranscript(view);
     view.passivePre.classList.remove('d-none');
     if (attachment && attachment.uuid) {
         const download = document.createElement('a');
