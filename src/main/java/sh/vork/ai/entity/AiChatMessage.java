@@ -10,7 +10,7 @@ import java.util.List;
  * <ul>
  *   <li>{@code "USER"} — message sent by the human</li>
  *   <li>{@code "ASSISTANT"} — text response from the model</li>
- *   <li>{@code "AWAITING_AUTHORIZATION"} — model requested a tool call that
+ *   <li>{@code "AWAITING_INPUT"} — model requested a tool call that
  *       needs human approval; {@link #toolCalls()} contains the pending call</li>
  *   <li>{@code "TOOL"} — tool execution result; {@link #toolCallId()} and
  *       {@link #toolName()} identify which call this responds to</li>
@@ -22,7 +22,7 @@ import java.util.List;
  * @param content     raw message text (markdown for assistant turns)
  * @param timestamp   epoch-milliseconds when the message was recorded
  * @param attachments file attachments associated with this message (may be null)
- * @param toolCalls   pending tool calls; non-null for {@code AWAITING_AUTHORIZATION} messages
+ * @param toolCalls   pending tool calls; non-null for {@code AWAITING_INPUT} messages
  * @param toolCallId  tool call ID being responded to; non-null for {@code TOOL} messages
  * @param toolName    name of the tool; non-null for {@code TOOL} messages
  */

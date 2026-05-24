@@ -93,7 +93,7 @@ public class AiJobRunner implements Runnable {
                 log.info("Scheduled AI job marked completed [id={}]", job.id());
                     } else if (job.repeatDuration() == 0
                         && finalSession != null
-                        && finalSession.status() == AiSessionStatus.AWAITING_AUTHORIZATION) {
+                        && finalSession.status() == AiSessionStatus.AWAITING_INPUT) {
                     jobRepository.save(new ScheduledJob(
                         job.id(),
                         job.name(),

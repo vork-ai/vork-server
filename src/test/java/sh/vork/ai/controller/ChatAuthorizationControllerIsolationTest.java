@@ -26,10 +26,16 @@ import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.function.ExecuteTerminalCommandRequest;
 import sh.vork.ai.protocol.UiEventFrame;
+import sh.vork.ai.protocol.interaction.FieldSource;
+import sh.vork.ai.protocol.interaction.FormAction;
+import sh.vork.ai.protocol.interaction.FormField;
+import sh.vork.ai.protocol.interaction.InteractionFormSchema;
 import sh.vork.ai.security.AuthorizationRuleEngine;
 import sh.vork.ai.service.AiOrchestrationService;
 import sh.vork.database.mock.MapDatabaseRepository;
 import sh.vork.scheduling.service.AiSchedulerService;
+import sh.vork.security.SecureCredentialStore;
+import sh.vork.security.SecureCredentialStoreService;
 
 class ChatAuthorizationControllerIsolationTest {
 
@@ -39,25 +45,18 @@ class ChatAuthorizationControllerIsolationTest {
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
 
         String sessionUuid = "session-web";
-        String promptJson = objectMapper.writeValueAsString(new UiEventFrame(
-                "evt-1",
-                "PROMPT_REQUIRED",
-                "AUTHORIZE_TOOL",
-                Map.of(
-                        "toolName", "compileJavaType",
-                        "toolCallId", "pending-1",
-                        "arguments", "{}",
-                        "actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"))));
+        AiChatMessage prompt = promptMessage("evt-1", "compileJavaType", "pending-1", "{}", "Need approval");
 
         sessionRepo.save(new AiSession(
                 sessionUuid,
                 AiProvider.GEMINI.name(),
                 SessionOriginMode.WEB,
                 "alice",
+                "Untitled",
                 System.currentTimeMillis(),
-            0,
-                List.of(new AiChatMessage("m1", "PROMPT_REQUIRED", promptJson, System.currentTimeMillis(), null)),
-            AiSessionStatus.AWAITING_AUTHORIZATION));
+                0,
+                List.of(prompt),
+                AiSessionStatus.AWAITING_INPUT));
 
         AuthorizationRuleEngine rules = new AuthorizationRuleEngine(List.of(), null);
         RecordingAiService aiService = new RecordingAiService("web-final");
@@ -71,13 +70,16 @@ class ChatAuthorizationControllerIsolationTest {
                 aiService,
                 messaging,
                 objectMapper,
-            List.of(allowingCompileTool()),
+                List.of(allowingCompileTool()),
                 directExecutor,
-                schedulerService);
+                schedulerService,
+                null,
+                null,
+                new SecureCredentialStoreService(new SecureCredentialStore()));
 
         ResponseEntity<Map<String, Object>> response = controller.respond(
                 sessionUuid,
-                new ChatAuthorizationController.AuthorizationResponseRequest("evt-1", "DENIED", Map.of()));
+                new ChatAuthorizationController.InteractionResponse("evt-1", "AUTHORIZE_TOOL", "DENIED", Map.of()));
 
         assertEquals("WEB_RESUMED", response.getBody().get("status"));
         assertTrue(aiService.generateWithHistoryCalls > 0);
@@ -95,25 +97,18 @@ class ChatAuthorizationControllerIsolationTest {
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
 
         String sessionUuid = "session-bg";
-        String promptJson = objectMapper.writeValueAsString(new UiEventFrame(
-                "evt-2",
-                "PROMPT_REQUIRED",
-                "AUTHORIZE_TOOL",
-                Map.of(
-                        "toolName", "compileJavaType",
-                        "toolCallId", "pending-2",
-                        "arguments", "{}",
-                        "actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"))));
+        AiChatMessage prompt = promptMessage("evt-2", "compileJavaType", "pending-2", "{}", "Need approval");
 
         sessionRepo.save(new AiSession(
                 sessionUuid,
                 AiProvider.BACKGROUND_SCHEDULER.name(),
                 SessionOriginMode.BACKGROUND,
                 "system-user",
+                "Untitled",
                 System.currentTimeMillis(),
-            0,
-                List.of(new AiChatMessage("m2", "PROMPT_REQUIRED", promptJson, System.currentTimeMillis(), null)),
-            AiSessionStatus.AWAITING_AUTHORIZATION));
+                0,
+                List.of(prompt),
+                AiSessionStatus.AWAITING_INPUT));
 
         AuthorizationRuleEngine rules = new AuthorizationRuleEngine(List.of(), null);
         RecordingAiService aiService = new RecordingAiService("bg-final");
@@ -129,11 +124,14 @@ class ChatAuthorizationControllerIsolationTest {
                 objectMapper,
                 List.of(),
                 directExecutor,
-                schedulerService);
+                schedulerService,
+                null,
+                null,
+                new SecureCredentialStoreService(new SecureCredentialStore()));
 
         ResponseEntity<Map<String, Object>> response = controller.respond(
                 sessionUuid,
-                new ChatAuthorizationController.AuthorizationResponseRequest("evt-2", "DENIED", Map.of()));
+                new ChatAuthorizationController.InteractionResponse("evt-2", "AUTHORIZE_TOOL", "DENIED", Map.of()));
 
         assertEquals("BACKGROUND_RESUMED", response.getBody().get("status"));
         assertEquals(sessionUuid, schedulerService.lastResumedSessionUuid);
@@ -144,31 +142,24 @@ class ChatAuthorizationControllerIsolationTest {
         assertEquals(AiSessionStatus.RUNNING, saved.status());
     }
 
-        @Test
-        void authorizeViaLink_backgroundOrigin_mapsPolicyAndResumes() throws Exception {
+    @Test
+    void authorizeViaLink_backgroundOrigin_mapsPolicyAndResumes() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
 
         String sessionUuid = "session-bg-link";
-        String promptJson = objectMapper.writeValueAsString(new UiEventFrame(
-            "evt-3",
-            "PROMPT_REQUIRED",
-            "AUTHORIZE_TOOL",
-            Map.of(
-                "toolName", "compileJavaType",
-                "toolCallId", "pending-3",
-                "arguments", "{}",
-                "actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"))));
+        AiChatMessage prompt = promptMessage("evt-3", "compileJavaType", "pending-3", "{}", "Need approval");
 
         sessionRepo.save(new AiSession(
-            sessionUuid,
-            AiProvider.BACKGROUND_SCHEDULER.name(),
-            SessionOriginMode.BACKGROUND,
-            "system-user",
-            System.currentTimeMillis(),
-            0,
-            List.of(new AiChatMessage("m3", "PROMPT_REQUIRED", promptJson, System.currentTimeMillis(), null)),
-            AiSessionStatus.AWAITING_AUTHORIZATION));
+                sessionUuid,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "system-user",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(prompt),
+                AiSessionStatus.AWAITING_INPUT));
 
         AuthorizationRuleEngine rules = new AuthorizationRuleEngine(List.of(), null);
         RecordingAiService aiService = new RecordingAiService("bg-final");
@@ -177,20 +168,23 @@ class ChatAuthorizationControllerIsolationTest {
         Executor directExecutor = Runnable::run;
 
         ChatAuthorizationController controller = new ChatAuthorizationController(
-            sessionRepo,
-            rules,
-            aiService,
-            messaging,
-            objectMapper,
-            List.of(allowingCompileTool()),
-            directExecutor,
-            schedulerService);
+                sessionRepo,
+                rules,
+                aiService,
+                messaging,
+                objectMapper,
+                List.of(allowingCompileTool()),
+                directExecutor,
+                schedulerService,
+                null,
+                null,
+                new SecureCredentialStoreService(new SecureCredentialStore()));
 
         ResponseEntity<Map<String, Object>> response = controller.authorizeViaLink(
-            sessionUuid,
-            true,
-            "ONCE",
-            null);
+                sessionUuid,
+                true,
+                "ONCE",
+                null);
 
         assertEquals("BACKGROUND_RESUMED", response.getBody().get("status"));
         assertEquals(sessionUuid, schedulerService.lastResumedSessionUuid);
@@ -199,45 +193,44 @@ class ChatAuthorizationControllerIsolationTest {
         assertNotNull(saved);
         assertEquals(SessionOriginMode.BACKGROUND, saved.originMode());
         assertEquals(AiSessionStatus.RUNNING, saved.status());
-        }
+    }
 
-        @Test
-        void pendingAuthorization_returnsPromptDetailsForUiCard() throws Exception {
+    @Test
+    void pendingAuthorization_returnsPromptDetailsForUiCard() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
 
         String sessionUuid = "session-pending-view";
-        String promptJson = objectMapper.writeValueAsString(new UiEventFrame(
-            "evt-4",
-            "PROMPT_REQUIRED",
-            "AUTHORIZE_TOOL",
-            Map.of(
-                "toolName", "getURLContents",
-                "toolCallId", "pending-4",
-                "reasoning", "Need to fetch page content before summarization.",
-                "arguments", "{\"url\":\"https://jadaptive.com\"}",
-                "displayArguments", "{\"url\":\"https://jadaptive.com\"}",
-                "actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"))));
+        AiChatMessage prompt = promptMessage(
+                "evt-4",
+                "getURLContents",
+                "pending-4",
+                "{\"url\":\"https://jadaptive.com\"}",
+                "Need to fetch page content before summarization.");
 
         sessionRepo.save(new AiSession(
-            sessionUuid,
-            AiProvider.BACKGROUND_SCHEDULER.name(),
-            SessionOriginMode.BACKGROUND,
-            "system-user",
-            System.currentTimeMillis(),
-            0,
-            List.of(new AiChatMessage("m4", "PROMPT_REQUIRED", promptJson, System.currentTimeMillis(), null)),
-            AiSessionStatus.AWAITING_AUTHORIZATION));
+                sessionUuid,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "system-user",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(prompt),
+                AiSessionStatus.AWAITING_INPUT));
 
         ChatAuthorizationController controller = new ChatAuthorizationController(
-            sessionRepo,
-            new AuthorizationRuleEngine(List.of(), null),
-            new RecordingAiService("unused"),
-            new SimpMessagingTemplate(new NoOpMessageChannel()),
-            objectMapper,
-            List.of(),
-            Runnable::run,
-            new RecordingSchedulerService());
+                sessionRepo,
+                new AuthorizationRuleEngine(List.of(), null),
+                new RecordingAiService("unused"),
+                new SimpMessagingTemplate(new NoOpMessageChannel()),
+                objectMapper,
+                List.of(),
+                Runnable::run,
+                new RecordingSchedulerService(),
+                null,
+                null,
+                new SecureCredentialStoreService(new SecureCredentialStore()));
 
         ResponseEntity<Map<String, Object>> response = controller.pendingAuthorization(sessionUuid, null);
 
@@ -245,53 +238,54 @@ class ChatAuthorizationControllerIsolationTest {
         assertEquals("OK", response.getBody().get("status"));
         assertEquals("evt-4", response.getBody().get("eventId"));
         assertEquals("getURLContents", response.getBody().get("toolName"));
-        assertEquals("AWAITING_AUTHORIZATION", response.getBody().get("sessionStatus"));
-        }
+        assertEquals("AWAITING_INPUT", response.getBody().get("sessionStatus"));
+    }
 
-        @Test
-        void respond_executeTerminalCommand_persistsReplayableTranscript() throws Exception {
+    @Test
+    void respond_executeTerminalCommand_persistsReplayableTranscript() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
 
         String sessionUuid = "session-terminal";
-        String promptJson = objectMapper.writeValueAsString(new UiEventFrame(
-            "evt-terminal",
-            "PROMPT_REQUIRED",
-            "AUTHORIZE_TOOL",
-            Map.of(
-                "toolName", "executeTerminalCommand",
-                "toolCallId", "pending-terminal",
-                "arguments", "{\"command\":\"ls -l\"}",
-                "actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"))));
+        AiChatMessage prompt = promptMessage(
+                "evt-terminal",
+                "executeTerminalCommand",
+                "pending-terminal",
+                "{\"command\":\"ls -l\"}",
+                "Need approval");
 
         sessionRepo.save(new AiSession(
-            sessionUuid,
-            AiProvider.GEMINI.name(),
-            SessionOriginMode.WEB,
-            "alice",
-            System.currentTimeMillis(),
-            0,
-            List.of(new AiChatMessage("m-terminal", "PROMPT_REQUIRED", promptJson, System.currentTimeMillis(), null)),
-            AiSessionStatus.AWAITING_AUTHORIZATION));
+                sessionUuid,
+                AiProvider.GEMINI.name(),
+                SessionOriginMode.WEB,
+                "alice",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(prompt),
+                AiSessionStatus.AWAITING_INPUT));
 
         ToolCallback terminalTool = FunctionToolCallback.builder("executeTerminalCommand",
                 (ExecuteTerminalCommandRequest req) -> "ls -lls -l\ntotal 1\nfile.txt\n")
-            .description("Execute a terminal command")
-            .inputType(ExecuteTerminalCommandRequest.class)
-            .build();
+                .description("Execute a terminal command")
+                .inputType(ExecuteTerminalCommandRequest.class)
+                .build();
 
         ChatAuthorizationController controller = new ChatAuthorizationController(
-            sessionRepo,
-            new AuthorizationRuleEngine(List.of(), null),
-            new RecordingAiService("terminal-final"),
-            new SimpMessagingTemplate(new NoOpMessageChannel()),
-            objectMapper,
-            List.of(terminalTool),
-            Runnable::run,
-            new RecordingSchedulerService());
+                sessionRepo,
+                new AuthorizationRuleEngine(List.of(), null),
+                new RecordingAiService("terminal-final"),
+                new SimpMessagingTemplate(new NoOpMessageChannel()),
+                objectMapper,
+                List.of(terminalTool),
+                Runnable::run,
+                new RecordingSchedulerService(),
+                null,
+                null,
+                new SecureCredentialStoreService(new SecureCredentialStore()));
 
         controller.respond(sessionUuid,
-            new ChatAuthorizationController.AuthorizationResponseRequest("evt-terminal", "ONCE", Map.of()));
+                new ChatAuthorizationController.InteractionResponse("evt-terminal", "AUTHORIZE_TOOL", "ONCE", Map.of()));
 
         AiSession saved = sessionRepo.get(sessionUuid);
         assertNotNull(saved);
@@ -306,7 +300,44 @@ class ChatAuthorizationControllerIsolationTest {
         assertEquals("total 1\nfile.txt\n", transcript.get("output"));
         assertEquals("ls -lls -l\ntotal 1\nfile.txt\n", transcript.get("rawOutput"));
         assertNull(payload.get("nonexistent"));
-        }
+    }
+
+    private static AiChatMessage promptMessage(
+            String eventId,
+            String toolName,
+            String toolCallId,
+            String arguments,
+            String reason) throws Exception {
+        ObjectMapper mapper = new ObjectMapper().findAndRegisterModules();
+        UiEventFrame frame = new UiEventFrame(
+                eventId,
+                "PROMPT_REQUIRED",
+                "AUTHORIZE_TOOL",
+                reason,
+                new InteractionFormSchema(
+                        "AUTHORIZE_TOOL",
+                        "Authorization Required",
+                        reason,
+                        List.of(
+                                new FormField("comment", "text", "Comment", "", false, FieldSource.CONVERSATION, List.of()),
+                                new FormField("apiKey", "password", "API Key", "", true, FieldSource.SECRET, List.of()),
+                                new FormField("profile", "text", "Profile", "", false, FieldSource.CONTEXT, List.of())),
+                        List.of(
+                                new FormAction("ONCE", "Allow Once", "primary"),
+                                new FormAction("SESSION", "Allow for Session", "secondary"),
+                                new FormAction("ALWAYS", "Always Allow", "success"),
+                                new FormAction("DENIED", "Deny", "danger"))));
+
+        return new AiChatMessage(
+                "m-" + eventId,
+                "PROMPT_REQUIRED",
+                mapper.writeValueAsString(frame),
+                System.currentTimeMillis(),
+                null,
+                List.of(new AiChatMessage.ToolCallRef(toolCallId, "FUNCTION", toolName, arguments)),
+                toolCallId,
+                toolName);
+    }
 
     private static final class RecordingAiService extends AiOrchestrationService {
         private final String nextOutput;
@@ -359,6 +390,6 @@ class ChatAuthorizationControllerIsolationTest {
                 .build();
     }
 
-    private record DummyCompileToolRequest(String source) {
+    record DummyCompileToolRequest(String source) {
     }
 }

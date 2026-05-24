@@ -133,7 +133,8 @@ public class ChatController {
                     UUID.randomUUID().toString(),
                     "TEXT_RESPONSE",
                     "CHAT_OUTPUT",
-                    Map.of("message", response));
+                    response.content(),
+                    null);
                 messaging.convertAndSend("/topic/chat/" + request.sessionUuid(), frame);
             }
             } catch (Exception ex) {
@@ -142,7 +143,8 @@ public class ChatController {
                 UUID.randomUUID().toString(),
                 "ERROR",
                 "CHAT_ERROR",
-                Map.of("message", "Sorry, something went wrong: " + ex.getMessage()));
+                "Sorry, something went wrong: " + ex.getMessage(),
+                null);
             messaging.convertAndSend("/topic/chat/" + request.sessionUuid(), frame);
             }
         }

@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
@@ -33,9 +34,9 @@ class AiSchedulerServiceTest {
         BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
-        @SuppressWarnings({"rawtypes"})
+        @SuppressWarnings("rawtypes")
         ScheduledFuture future = mock(ScheduledFuture.class);
-        when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenReturn(future);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
 
         AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
@@ -70,10 +71,10 @@ class AiSchedulerServiceTest {
         BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
-        @SuppressWarnings({"rawtypes"})
+        @SuppressWarnings("rawtypes")
         ScheduledFuture future = mock(ScheduledFuture.class);
-        when(scheduler.scheduleAtFixedRate(any(Runnable.class), any(Instant.class), any(Duration.class)))
-                .thenReturn(future);
+        doReturn(future).when(scheduler)
+            .scheduleAtFixedRate(any(Runnable.class), any(Instant.class), any(Duration.class));
 
         AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
@@ -102,9 +103,9 @@ class AiSchedulerServiceTest {
         BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        @SuppressWarnings("rawtypes")
         ScheduledFuture future = mock(ScheduledFuture.class);
-        when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenReturn(future);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
 
         AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 
@@ -138,9 +139,9 @@ class AiSchedulerServiceTest {
         BackgroundOrchestrationEngine orchestrationEngine = mock(BackgroundOrchestrationEngine.class);
         @SuppressWarnings("unchecked")
         DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
-        @SuppressWarnings({"rawtypes", "unchecked"})
+        @SuppressWarnings("rawtypes")
         ScheduledFuture future = mock(ScheduledFuture.class);
-        when(scheduler.schedule(any(Runnable.class), any(Instant.class))).thenReturn(future);
+        doReturn(future).when(scheduler).schedule(any(Runnable.class), any(Instant.class));
 
         AiSchedulerService service = new AiSchedulerService(scheduler, repo, orchestrationEngine, sessionRepo);
 

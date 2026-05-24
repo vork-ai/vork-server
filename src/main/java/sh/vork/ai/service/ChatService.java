@@ -38,9 +38,8 @@ import sh.vork.ai.entity.AiChatMessage.ToolCallRef;
 import sh.vork.ai.entity.AiSession;
 import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.exception.ToolSuspensionException;
 import sh.vork.ai.protocol.UiEventFrame;
-import sh.vork.ai.security.ToolSuspensionException;
-import sh.vork.ai.security.VisualizableTool;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.database.SearchQuery;
 import sh.vork.database.SortOrder;
@@ -69,7 +68,6 @@ public class ChatService {
     private final FileStorageService            fileStorageService;
     private final SimpMessagingTemplate         messaging;
     private final ObjectMapper                  objectMapper;
-    private final Map<String, ToolCallback>     toolCallbacksByName;
     private final SystemNotificationService     systemNotificationService;
     private final Executor                      aiBackgroundExecutor;
 
@@ -90,23 +88,7 @@ public class ChatService {
         this.messaging           = messaging;
         this.objectMapper        = objectMapper;
         this.systemNotificationService = systemNotificationService;
-            this.aiBackgroundExecutor = aiBackgroundExecutor;
-        this.toolCallbacksByName = toolCallbacks.stream().collect(
-                Collectors.toMap(
-                        t -> t.getToolDefinition().name(),
-                        t -> t,
-                        (a, b) -> a));
-    }
-
-    public ChatService(DatabaseRepository<AiSession> aiSessionRepository,
-                       AiOrchestrationService aiOrchestrationService,
-                       FileStorageService fileStorageService,
-                       SimpMessagingTemplate messaging,
-                       ObjectMapper objectMapper,
-                       List<ToolCallback> toolCallbacks) {
-        this(aiSessionRepository, aiOrchestrationService, fileStorageService, messaging,
-                objectMapper, toolCallbacks, (toolName, arguments, sessionUuid, eventId) -> {
-                }, Runnable::run);
+        this.aiBackgroundExecutor = aiBackgroundExecutor;
     }
 
     /**
@@ -114,13 +96,28 @@ public class ChatService {
      * or creates a new one bound to {@code provider}.
      */
     public AiSession getOrCreateSession(String httpSessionId, AiProvider provider) {
-        List<AiSession> sessions = listSessionsForCurrentUser();
-        if (!sessions.isEmpty()) {
-            AiSession latest = sessions.get(0);
-            log.debug("Resuming latest AI session [id={}, messages={}]", latest.uuid(), latest.messages().size());
-            return latest;
+        if (httpSessionId == null || httpSessionId.isBlank()) {
+            throw new IllegalArgumentException("httpSessionId is required");
         }
-        return createNewSession(provider);
+
+        AiSession existing = sessionRepo.get(httpSessionId);
+        if (existing != null) {
+            String username = resolveUsername();
+            if (!username.equals(existing.username())) {
+                throw new IllegalStateException("Access denied for session: " + httpSessionId);
+            }
+            log.debug("Resuming HTTP session-bound AI session [id={}, messages={}]",
+                existing.uuid(), existing.messages().size());
+            return existing;
+        }
+
+        String username = resolveUsername();
+        AiSession session = new AiSession(httpSessionId, provider.name(), SessionOriginMode.WEB,
+            username, DEFAULT_SESSION_NAME, System.currentTimeMillis(), 0, List.of(), AiSessionStatus.RUNNING);
+        sessionRepo.save(session);
+        log.info("Created HTTP session-bound AI session [id={}, provider={}, user={}]",
+            httpSessionId, provider, username);
+        return session;
     }
 
     public AiSession createNewSession(AiProvider provider) {
@@ -213,7 +210,7 @@ public class ChatService {
         AiSession session = getSessionForCurrentUser(sessionUuid);
 
         // Build Spring AI message list from stored history
-        // AWAITING_AUTHORIZATION and TOOL messages are skipped here; the
+        // AWAITING_INPUT and TOOL messages are skipped here; the
         // authorization controller handles resumption via generateFromHistory().
         List<Message> history = hydrateHistory(session.messages());
 
@@ -306,17 +303,7 @@ public class ChatService {
             List<ToolCallRef> pendingToolCalls = List.of(
                     new ToolCallRef(simulatedToolCallId, "FUNCTION", ex.getToolName(), ex.getArguments()));
 
-            ToolCallback targetTool = toolCallbacksByName.get(ex.getToolName());
-            String displayArguments = ex.getArguments();
-            if (targetTool instanceof VisualizableTool visualTool) {
-                try {
-                    displayArguments = visualTool.formatAuthorizationDetails(ex.getArguments());
-                } catch (Exception e) {
-                    log.warn("Failed to pretty print tool arguments, falling back to raw JSON", e);
-                }
-            }
-
-            String justification = ex.getReasoning();
+            String justification = ex.getJustification();
             if (justification == null || justification.isBlank()) {
                 justification = defaultAuthorizationReason(ex.getToolName());
             }
@@ -326,14 +313,8 @@ public class ChatService {
                 eventId,
                 "PROMPT_REQUIRED",
                 "AUTHORIZE_TOOL",
-                java.util.Map.of(
-                    "toolName", ex.getToolName(),
-                    "toolCallId", simulatedToolCallId,
-                    "reasoning", justification,
-                    "arguments", ex.getArguments(),
-                    "displayArguments", displayArguments,
-                    "actions", java.util.List.of("ONCE", "SESSION", "ALWAYS", "DENIED")
-                ));
+                justification,
+                ex.getFormSchema());
 
             String promptJson;
             try {
@@ -357,14 +338,14 @@ public class ChatService {
                     System.currentTimeMillis(),
                     refs.isEmpty() ? null : Collections.unmodifiableList(refs),
                     pendingToolCalls,
-                    null,
-                    null);
+                    simulatedToolCallId,
+                    ex.getToolName());
 
             List<AiChatMessage> updated = new ArrayList<>(session.messages());
             updated.add(userMsg);
             updated.add(awaiting);
                 sessionRepo.save(new AiSession(session.uuid(), session.provider(), session.originMode(), session.username(),
-                    session.name(), session.createdAt(), session.currentRoundCount(), List.copyOf(updated), AiSessionStatus.AWAITING_AUTHORIZATION));
+                    session.name(), session.createdAt(), session.currentRoundCount(), List.copyOf(updated), AiSessionStatus.AWAITING_INPUT));
 
                 if (provider == AiProvider.BACKGROUND_SCHEDULER) {
                 systemNotificationService.notifyOfflineOperator(ex.getToolName(), ex.getArguments(), sessionUuid, eventId);
@@ -502,17 +483,7 @@ public class ChatService {
             List<ToolCallRef> pendingToolCalls = List.of(
                     new ToolCallRef(simulatedToolCallId, "FUNCTION", ex.getToolName(), ex.getArguments()));
 
-            ToolCallback targetTool = toolCallbacksByName.get(ex.getToolName());
-            String displayArguments = ex.getArguments();
-            if (targetTool instanceof VisualizableTool visualTool) {
-                try {
-                    displayArguments = visualTool.formatAuthorizationDetails(ex.getArguments());
-                } catch (Exception e) {
-                    log.warn("Failed to pretty print tool arguments, falling back to raw JSON", e);
-                }
-            }
-
-            String justification = ex.getReasoning();
+            String justification = ex.getJustification();
             if (justification == null || justification.isBlank()) {
                 justification = defaultAuthorizationReason(ex.getToolName());
             }
@@ -522,14 +493,8 @@ public class ChatService {
                 eventId,
                 "PROMPT_REQUIRED",
                 "AUTHORIZE_TOOL",
-                java.util.Map.of(
-                    "toolName", ex.getToolName(),
-                    "toolCallId", simulatedToolCallId,
-                    "reasoning", justification,
-                    "arguments", ex.getArguments(),
-                    "displayArguments", displayArguments,
-                    "actions", java.util.List.of("ONCE", "SESSION", "ALWAYS", "DENIED")
-                ));
+                justification,
+                ex.getFormSchema());
 
             String promptJson;
             try {
@@ -553,14 +518,14 @@ public class ChatService {
                     System.currentTimeMillis(),
                     refs.isEmpty() ? null : Collections.unmodifiableList(refs),
                     pendingToolCalls,
-                    null,
-                    null);
+                    simulatedToolCallId,
+                    ex.getToolName());
 
             List<AiChatMessage> updated = new ArrayList<>(session.messages());
             updated.add(userMsg);
             updated.add(awaiting);
                 sessionRepo.save(new AiSession(session.uuid(), session.provider(), session.originMode(), session.username(),
-                    session.name(), session.createdAt(), session.currentRoundCount(), List.copyOf(updated), AiSessionStatus.AWAITING_AUTHORIZATION));
+                    session.name(), session.createdAt(), session.currentRoundCount(), List.copyOf(updated), AiSessionStatus.AWAITING_INPUT));
 
                 if (provider == AiProvider.BACKGROUND_SCHEDULER) {
                 systemNotificationService.notifyOfflineOperator(ex.getToolName(), ex.getArguments(), sessionUuid, eventId);

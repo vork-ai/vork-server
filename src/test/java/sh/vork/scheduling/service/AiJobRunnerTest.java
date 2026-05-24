@@ -15,6 +15,7 @@ import org.springframework.security.core.context.SecurityContextHolder;
 
 import sh.vork.ai.entity.AiSession;
 import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.database.DatabaseRepository;
 import sh.vork.scheduling.domain.DurationType;
 import sh.vork.scheduling.domain.ScheduledJob;
@@ -49,8 +50,11 @@ class AiJobRunnerTest {
         when(sessionRepo.get(org.mockito.ArgumentMatchers.anyString())).thenReturn(new AiSession(
             "sid",
             "BACKGROUND_SCHEDULER",
+            SessionOriginMode.BACKGROUND,
             "alice",
+            "Untitled",
             Instant.now().toEpochMilli(),
+            0,
             java.util.List.of(),
             AiSessionStatus.COMPLETED));
 

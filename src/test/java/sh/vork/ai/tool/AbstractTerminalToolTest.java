@@ -32,6 +32,7 @@ class AbstractTerminalToolTest {
                 "GEMINI",
                 SessionOriginMode.WEB,
                 "alice",
+            "Untitled",
                 System.currentTimeMillis(),
                 0,
                 List.of(new AiChatMessage("m1", "USER", "hello", System.currentTimeMillis(), null)),

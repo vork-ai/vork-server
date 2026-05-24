@@ -18,14 +18,13 @@ import sh.vork.database.DatabaseRepository;
 public class DatabaseUserDetailsService implements UserDetailsService {
     private final DatabaseRepository<VorkUser> userRepository;
     private final PasswordEncoder passwordEncoder;
-    private final boolean seeded;
 
     @Autowired
     public DatabaseUserDetailsService(DatabaseRepository<VorkUser> userRepository,
                                      PasswordEncoder passwordEncoder) {
         this.userRepository = userRepository;
         this.passwordEncoder = passwordEncoder;
-        this.seeded = seedDefaultUsersIfEmpty();
+        seedDefaultUsersIfEmpty();
     }
 
     @Override

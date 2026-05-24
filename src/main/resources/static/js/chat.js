@@ -27,6 +27,7 @@ let chatSubscription = null;
 let waiting     = false;
 let sessions    = [];
 let editingSessionUuid = null;
+let awaitingPostTerminalResponse = false;
 
 const terminalState = {
     views: new Map(),
@@ -72,6 +73,14 @@ function setInputEnabled(on) {
     messageInput.disabled = !on;
     sendBtn.disabled = !on;
     waiting = !on;
+}
+
+function setAwaitingPostTerminalResponse(on) {
+    awaitingPostTerminalResponse = !!on;
+    showTyping(awaitingPostTerminalResponse);
+    if (awaitingPostTerminalResponse) {
+        setInputEnabled(false);
+    }
 }
 
 function getTerminalWsUrl(terminalId) {
@@ -279,7 +288,11 @@ function isUiEventFrame(obj) {
     return obj && typeof obj === 'object'
         && typeof obj.type === 'string'
         && typeof obj.intent === 'string'
-        && obj.payload && typeof obj.payload === 'object';
+        && (
+            (obj.payload && typeof obj.payload === 'object')
+            || typeof obj.textResponse === 'string'
+            || (obj.formSchema && typeof obj.formSchema === 'object')
+        );
 }
 
 function tryParseJson(text) {
@@ -529,6 +542,7 @@ function handleTerminalStart(frame) {
         return;
     }
 
+    setAwaitingPostTerminalResponse(false);
     showTyping(false);
     setInputEnabled(false);
 
@@ -616,8 +630,7 @@ function handleTerminalEnd(frame) {
     const terminalId = frame && typeof frame.terminalId === 'string' ? frame.terminalId : null;
     if (!terminalId) {
         if (!hasLiveTerminal()) {
-            setInputEnabled(true);
-            focusMessageInput();
+            setAwaitingPostTerminalResponse(true);
         }
         return;
     }
@@ -628,8 +641,7 @@ function handleTerminalEnd(frame) {
         const pending = getPendingTerminalState(terminalId);
         pending.endReceived = true;
         if (!hasLiveTerminal()) {
-            setInputEnabled(true);
-            focusMessageInput();
+            setAwaitingPostTerminalResponse(true);
         }
         return;
     }
@@ -637,6 +649,10 @@ function handleTerminalEnd(frame) {
     view.endReceived = true;
     flushTerminalChunks(view);
     maybeFinalizeTerminalView(view);
+
+    if (!hasLiveTerminal()) {
+        setAwaitingPostTerminalResponse(true);
+    }
 }
 
 function renderTerminalTranscript(terminalId, command, output, expanded, attachment) {
@@ -734,12 +750,34 @@ function findLastUnansweredPromptIndex(messages) {
 
 function renderPromptRequiredFrame(frame) {
     const payload = frame.payload || {};
-    const reasoning = typeof payload.reasoning === 'string' && payload.reasoning.trim()
-        ? payload.reasoning
-        : 'The AI requested this action to process your command.';
-    const rawArgs = typeof payload.arguments === 'string' ? payload.arguments : JSON.stringify(payload.arguments || {});
+    const schema = frame.formSchema || {};
+    const reasoning = (typeof frame.textResponse === 'string' && frame.textResponse.trim())
+        ? frame.textResponse
+        : ((typeof payload.reasoning === 'string' && payload.reasoning.trim())
+            ? payload.reasoning
+            : 'The AI requested this action to process your command.');
+
+    function contextValue(name) {
+        const fields = Array.isArray(schema.fields) ? schema.fields : [];
+        for (let i = 0; i < fields.length; i++) {
+            const f = fields[i];
+            if (f && f.name === name) {
+                return typeof f.placeholder === 'string' ? f.placeholder : '';
+            }
+        }
+        return '';
+    }
+
+    const rawArgs = contextValue('arguments')
+        || (typeof payload.arguments === 'string' ? payload.arguments : JSON.stringify(payload.arguments || {}));
     const displayArgs = typeof payload.displayArguments === 'string' ? payload.displayArguments : rawArgs;
-    const actions = Array.isArray(payload.actions) ? payload.actions : [];
+
+    const schemaActions = Array.isArray(schema.actions)
+        ? schema.actions.map(function (a) { return typeof a === 'string' ? a : a && a.name; }).filter(Boolean)
+        : [];
+    const actions = schemaActions.length > 0
+        ? schemaActions
+        : (Array.isArray(payload.actions) ? payload.actions : []);
 
     const previewSource = String(displayArgs || '').trim();
     const previewLines = previewSource.split(/\r?\n/);
@@ -781,7 +819,7 @@ function renderPromptRequiredFrame(frame) {
         }
 
         btn.addEventListener('click', function () {
-            sendAuthorizationAction(frame.eventId, action, {});
+            sendAuthorizationAction(frame.eventId, frame.intent, action, {});
             row.querySelectorAll('.prompt-action-btn').forEach(function (b) { b.disabled = true; });
         });
         actionsEl.appendChild(btn);
@@ -815,6 +853,10 @@ function handleIncomingUiFrame(frame) {
                 renderMessage(frame.payload.message);
                 return;
             }
+            if (typeof frame.textResponse === 'string') {
+                renderMessage({ role: 'ASSISTANT', content: frame.textResponse });
+                return;
+            }
             if (frame.payload && typeof frame.payload.content === 'string') {
                 renderMessage({ role: 'ASSISTANT', content: frame.payload.content });
                 return;
@@ -825,7 +867,9 @@ function handleIncomingUiFrame(frame) {
         case 'ERROR':
             renderMessage({
                 role: 'ERROR',
-                content: (frame.payload && frame.payload.message) ? String(frame.payload.message) : 'Unknown error'
+                content: (typeof frame.textResponse === 'string' && frame.textResponse)
+                    ? frame.textResponse
+                    : ((frame.payload && frame.payload.message) ? String(frame.payload.message) : 'Unknown error')
             });
             return;
 
@@ -852,6 +896,10 @@ async function renderSessionRecord(msg, index, messages, lastPromptIndex) {
 
     if (msg.role === 'TEXT_RESPONSE') {
         const frame = tryParseJson(msg.content);
+        if (frame && typeof frame.textResponse === 'string') {
+            renderMessage({ role: 'ASSISTANT', content: frame.textResponse });
+            return;
+        }
         if (frame && frame.payload && typeof frame.payload.content === 'string') {
             renderMessage({ role: 'ASSISTANT', content: frame.payload.content });
             return;
@@ -866,7 +914,7 @@ async function renderSessionRecord(msg, index, messages, lastPromptIndex) {
     renderMessage(msg);
 }
 
-function sendAuthorizationAction(eventId, action, fields) {
+function sendAuthorizationAction(eventId, intent, action, fields) {
     if (!sessionUuid) return;
 
     showTyping(true);
@@ -877,6 +925,7 @@ function sendAuthorizationAction(eventId, action, fields) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             eventId: eventId,
+            intent: intent || 'AUTHORIZE_TOOL',
             action: action,
             fields: fields || {}
         })
@@ -1137,6 +1186,7 @@ function subscribeToCurrentSession() {
             return;
         }
 
+        setAwaitingPostTerminalResponse(false);
         showTyping(false);
         if (!hasLiveTerminal()) {
             setInputEnabled(true);
@@ -1374,13 +1424,9 @@ function createNewChat() {
 }
 
 function initSession() {
-    loadSessionList()
-        .then(function (list) {
-            if (list.length > 0) {
-                return loadSession(list[0].sessionUuid);
-            }
-            return loadSession();
-        })
+    // Always bootstrap against /api/chat/session with no explicit session UUID
+    // so backend can bind the active chat to the current HTTP session.
+    loadSession()
         .catch(function (err) {
             renderMessage({ role: 'ERROR', content: '**Failed to initialise session:** ' + err.message });
             setStatus('disconnected');

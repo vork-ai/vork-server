@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import java.util.Set;
 import java.util.Map;
+import java.util.List;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
@@ -19,6 +20,8 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
 import org.springframework.security.authentication.TestingAuthenticationToken;
 import org.springframework.security.core.context.SecurityContextHolder;
+
+import sh.vork.ai.exception.ToolSuspensionException;
 
 class SecuredToolCallbackTest {
 
@@ -74,7 +77,34 @@ class SecuredToolCallbackTest {
 
         verify(delegate, never()).call(anyString(), any());
         assertEquals("I need to compile this class so it can be stored and used in later steps.",
-                ex.getReasoning());
+            ex.getJustification());
+    }
+
+    @Test
+    void restrictedVisualizableTool_includesFormattedPreviewInFormSchema() {
+        AuthorizationRuleEngine rules = new AuthorizationRuleEngine(Set.of("executeTerminalCommand"));
+        ToolCallback base = delegate("executeTerminalCommand");
+        ToolCallback visualizable = new VisualizableToolCallback(
+                base,
+                args -> {
+                    if (args.contains("command")) {
+                        return "```bash\nls -la\n```";
+                    }
+                    return args;
+                });
+
+        SecuredToolCallback secured = new SecuredToolCallback(visualizable, rules);
+
+        ToolSuspensionException ex = assertThrows(ToolSuspensionException.class,
+                () -> secured.call("{\"command\":\"ls -la\"}"));
+
+        assertEquals("executeTerminalCommand", ex.getToolName());
+        assertEquals("{\"command\":\"ls -la\"}", ex.getArguments());
+        assertEquals(1, ex.getFormSchema().fields().size());
+        assertEquals("arguments", ex.getFormSchema().fields().get(0).name());
+        assertEquals("```bash\nls -la\n```", ex.getFormSchema().fields().get(0).placeholder());
+        assertEquals(List.of("ONCE", "SESSION", "ALWAYS", "DENIED"),
+                ex.getFormSchema().actions().stream().map(a -> a.name()).toList());
     }
 
     private static ToolCallback delegate(String toolName) {

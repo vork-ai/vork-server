@@ -41,9 +41,14 @@ import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiSession;
 import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.ai.entity.SessionOriginMode;
+import sh.vork.ai.exception.ToolSuspensionException;
 import sh.vork.ai.protocol.UiEventFrame;
+import sh.vork.ai.protocol.interaction.FieldSource;
+import sh.vork.ai.protocol.interaction.FormAction;
+import sh.vork.ai.protocol.interaction.FormField;
+import sh.vork.ai.protocol.interaction.InteractionFormSchema;
 import sh.vork.ai.security.AuthorizationRuleEngine;
-import sh.vork.ai.security.ToolSuspensionException;
+import sh.vork.ai.security.ThreadLocalExecutionContext;
 import sh.vork.ai.security.VisualizableTool;
 import sh.vork.ai.service.AiOrchestrationService;
 import sh.vork.ai.service.ChatService;
@@ -53,6 +58,8 @@ import sh.vork.scheduling.service.SystemBackgroundAuthentication;
 
 import java.util.concurrent.Executor;
 
+import sh.vork.security.SecureCredentialStoreService;
+import sh.vork.security.VorkUser;
 import sh.vork.storage.FileStorageService;
 
 /**
@@ -74,6 +81,7 @@ public class ChatAuthorizationController {
     private final AiSchedulerService aiSchedulerService;
     private final FileStorageService fileStorageService;
     private final ChatService chatService;
+    private final SecureCredentialStoreService secureCredentialStoreService;
 
     @Autowired
     public ChatAuthorizationController(DatabaseRepository<AiSession> sessionRepo,
@@ -85,7 +93,8 @@ public class ChatAuthorizationController {
                                        @Qualifier("aiBackgroundExecutor") Executor aiBackgroundExecutor,
                                        AiSchedulerService aiSchedulerService,
                                        FileStorageService fileStorageService,
-                                       ChatService chatService) {
+                                       ChatService chatService,
+                                       SecureCredentialStoreService secureCredentialStoreService) {
         this.sessionRepo = sessionRepo;
         this.authorizationRuleEngine = authorizationRuleEngine;
         this.aiService = aiService;
@@ -95,6 +104,7 @@ public class ChatAuthorizationController {
         this.aiBackgroundExecutor = aiBackgroundExecutor;
         this.aiSchedulerService = aiSchedulerService;
         this.chatService = chatService;
+        this.secureCredentialStoreService = secureCredentialStoreService;
         this.toolCallbacksByName = toolCallbacks.stream().collect(
                 java.util.stream.Collectors.toMap(
                         t -> t.getToolDefinition().name(),
@@ -102,34 +112,14 @@ public class ChatAuthorizationController {
                         (a, b) -> a));
     }
 
-        public ChatAuthorizationController(DatabaseRepository<AiSession> sessionRepo,
-                           AuthorizationRuleEngine authorizationRuleEngine,
-                           AiOrchestrationService aiService,
-                           SimpMessagingTemplate messaging,
-                           ObjectMapper objectMapper,
-                           List<ToolCallback> toolCallbacks,
-                           @Qualifier("aiBackgroundExecutor") Executor aiBackgroundExecutor,
-                           AiSchedulerService aiSchedulerService) {
-        this(sessionRepo,
-            authorizationRuleEngine,
-            aiService,
-            messaging,
-            objectMapper,
-            toolCallbacks,
-            aiBackgroundExecutor,
-            aiSchedulerService,
-            null,
-            null);
-        }
-
     @PostMapping("/respond/{sessionUuid}")
     public ResponseEntity<Map<String, Object>> respond(@PathVariable String sessionUuid,
-                                                       @RequestBody AuthorizationResponseRequest request) {
+                                                       @RequestBody InteractionResponse request) {
         AiSession session = sessionRepo.get(sessionUuid);
         if (session == null) {
             throw new IllegalStateException("AI session not found: " + sessionUuid);
         }
-        if (session.status() != AiSessionStatus.AWAITING_AUTHORIZATION) {
+        if (session.status() != AiSessionStatus.AWAITING_INPUT) {
             throw new IllegalStateException("Session is not awaiting input: " + sessionUuid);
         }
 
@@ -141,25 +131,50 @@ public class ChatAuthorizationController {
 
         try (MDC.MDCCloseable sid = MDC.putCloseable("sessionUuid", sessionUuid);
              MDC.MDCCloseable eid = MDC.putCloseable("eventId", correlationEventId)) {
-
-            String toolName = String.valueOf(promptEvent.payload().get("toolName"));
-            String toolCallId = String.valueOf(promptEvent.payload().get("toolCallId"));
             String action = normalizeAction(request.action());
             String username = resolveUsername();
-            Map<String, Object> fields = request.fields() == null ? Map.of() : request.fields();
+
+            String toolName = promptMessage.toolName();
+            String toolCallId = promptMessage.toolCallId();
+            String argumentsJson = extractPendingArguments(promptMessage, toolCallId);
+            if (toolName == null || toolName.isBlank()) {
+                throw new IllegalStateException("Missing pending tool name in prompt message");
+            }
+            if (toolCallId == null || toolCallId.isBlank()) {
+                throw new IllegalStateException("Missing pending tool call ID in prompt message");
+            }
+
+            Map<String, String> incomingFields = request.fields() == null ? Map.of() : request.fields();
+            Map<String, FieldSource> sourceByField = buildFieldSourceMap(promptEvent.formSchema());
+            Map<String, String> conversationFields = new HashMap<>();
+            for (Map.Entry<String, String> entry : incomingFields.entrySet()) {
+                String key = entry.getKey();
+                String value = entry.getValue();
+                FieldSource source = sourceByField.getOrDefault(key, FieldSource.CONVERSATION);
+                switch (source) {
+                    case SECRET -> {
+                        if (secureCredentialStoreService != null) {
+                            secureCredentialStoreService.saveSecret(toPrincipalUser(username), key, value);
+                        }
+                    }
+                    case CONTEXT -> ThreadLocalExecutionContext.put(key, value);
+                    case CONVERSATION -> conversationFields.put(key, value);
+                }
+            }
 
             log.info("Resume request received [action={}, tool={}, toolCallId={}, user={}, fieldKeys={}]",
                 action,
                 toolName,
                 toolCallId,
                 username,
-                fields.keySet());
-            log.debug("Resume request fields payload: {}", abbreviate(toJson(fields), 2000));
+                incomingFields.keySet());
+            log.debug("Resume request conversation fields payload: {}", abbreviate(toJson(conversationFields), 2000));
 
-            applyAuthorizationAction(action, username, toolName, toolCallId);
+            if ("AUTHORIZE_TOOL".equalsIgnoreCase(request.intent())) {
+                applyAuthorizationAction(action, username, toolName, toolCallId);
+            }
 
-            String argumentsJson = String.valueOf(promptEvent.payload().getOrDefault("arguments", "{}"));
-            String token = toolResponseDataForAction(action, fields, toolName, argumentsJson);
+            String token = toolResponseDataForAction(action, conversationFields, toolName, argumentsJson);
             ToolResponseMessage.ToolResponse toolResponse =
                 new ToolResponseMessage.ToolResponse(toolCallId, toolName, token);
             ToolResponseMessage toolResponseMessage = ToolResponseMessage.builder()
@@ -174,7 +189,7 @@ public class ChatAuthorizationController {
                     "name", toolResponse.name(),
                     "responseData", toolResponse.responseData())),
                 "message", toolResponseMessage.toString(),
-                "fields", fields
+                "fields", conversationFields
             ));
 
             Map<String, Object> terminalTranscript = extractTerminalTranscript(toolName, toolResponse.responseData());
@@ -188,7 +203,7 @@ public class ChatAuthorizationController {
                         "name", toolResponse.name(),
                         "responseData", toolResponse.responseData())));
                 payload.put("message", toolResponseMessage.toString());
-                payload.put("fields", fields);
+                payload.put("fields", conversationFields);
                 payload.put("terminalTranscript", terminalTranscript);
                 toolPayloadJson = toJson(payload);
                 
@@ -268,17 +283,7 @@ public class ChatAuthorizationController {
                 List<AiChatMessage.ToolCallRef> pendingToolCalls = List.of(
                     new AiChatMessage.ToolCallRef(simulatedToolCallId, "FUNCTION", ex.getToolName(), ex.getArguments()));
 
-                ToolCallback targetTool = toolCallbacksByName.get(ex.getToolName());
-                String displayArguments = ex.getArguments();
-                if (targetTool instanceof VisualizableTool visualTool) {
-                    try {
-                        displayArguments = visualTool.formatAuthorizationDetails(ex.getArguments());
-                    } catch (Exception e) {
-                        log.warn("Failed to pretty print tool arguments during resumed call, using raw JSON", e);
-                    }
-                }
-
-                String justification = ex.getReasoning();
+                String justification = ex.getJustification();
                 if (justification == null || justification.isBlank()) {
                     justification = defaultAuthorizationReason(ex.getToolName());
                 }
@@ -287,14 +292,8 @@ public class ChatAuthorizationController {
                     UUID.randomUUID().toString(),
                     "PROMPT_REQUIRED",
                     "AUTHORIZE_TOOL",
-                    Map.of(
-                        "toolName", ex.getToolName(),
-                        "toolCallId", simulatedToolCallId,
-                        "reasoning", justification,
-                        "arguments", ex.getArguments(),
-                        "displayArguments", displayArguments,
-                        "actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED")
-                    ));
+                    justification,
+                    ex.getFormSchema());
 
                 updated.add(new AiChatMessage(
                     UUID.randomUUID().toString(),
@@ -303,8 +302,8 @@ public class ChatAuthorizationController {
                     System.currentTimeMillis(),
                     null,
                     pendingToolCalls,
-                    null,
-                    null));
+                    simulatedToolCallId,
+                    ex.getToolName()));
 
                 sessionRepo.save(new AiSession(
                     session.uuid(),
@@ -315,13 +314,13 @@ public class ChatAuthorizationController {
                     session.createdAt(),
                     session.currentRoundCount(),
                     List.copyOf(updated),
-                    AiSessionStatus.AWAITING_AUTHORIZATION));
+                    AiSessionStatus.AWAITING_INPUT));
 
                 messaging.convertAndSend("/topic/chat/" + sessionUuid, suspendedPromptEvent);
                 log.info("Resumed call suspended again [tool={}, session={}]", ex.getToolName(), sessionUuid);
 
                 return ResponseEntity.ok(Map.of(
-                    "status", "AWAITING_AUTHORIZATION",
+                    "status", "AWAITING_INPUT",
                     "eventType", suspendedPromptEvent.type(),
                     "eventId", suspendedPromptEvent.eventId(),
                     "toolName", ex.getToolName()
@@ -332,7 +331,8 @@ public class ChatAuthorizationController {
                     UUID.randomUUID().toString(),
                     "TEXT_RESPONSE",
                     "CHAT_OUTPUT",
-                    Map.of("content", finalText == null ? "" : finalText));
+                    finalText == null ? "" : finalText,
+                    null);
 
             updated.add(new AiChatMessage(
                     UUID.randomUUID().toString(),
@@ -381,8 +381,9 @@ public class ChatAuthorizationController {
             sessionUuid, approved, policy, action);
 
         return respond(sessionUuid,
-            new AuthorizationResponseRequest(
+            new InteractionResponse(
                 eventId,
+                "AUTHORIZE_TOOL",
                 action,
                 Map.of("source", "authorize-link")));
         }
@@ -402,20 +403,35 @@ public class ChatAuthorizationController {
         try {
             AiChatMessage promptMessage = findPromptMessage(session.messages(), eventId);
             UiEventFrame frame = readEventFrame(promptMessage.content());
-            Map<String, Object> payload = frame.payload() == null ? Map.of() : frame.payload();
-            Object actions = payload.getOrDefault("actions", List.of("ONCE", "SESSION", "ALWAYS", "DENIED"));
+            InteractionFormSchema schema = frame.formSchema();
+            if (schema == null) {
+                throw new IllegalStateException("Missing interaction form schema");
+            }
+            List<FormAction> actions = schema.actions() == null ? List.of() : schema.actions();
+            String toolName = promptMessage.toolName();
+            String toolCallId = promptMessage.toolCallId();
+            String arguments = extractPendingArguments(promptMessage, toolCallId);
+            String displayArguments = formatDisplayArguments(toolName, arguments);
+            if (toolName == null || toolName.isBlank()) {
+                throw new IllegalStateException("Missing pending tool name in prompt message");
+            }
+            if (toolCallId == null || toolCallId.isBlank()) {
+                throw new IllegalStateException("Missing pending tool call ID in prompt message");
+            }
 
-            return ResponseEntity.ok(Map.of(
-                "status", "OK",
-                "sessionUuid", sessionUuid,
-                "sessionStatus", String.valueOf(session.status()),
-                "eventId", frame.eventId(),
-                "toolName", String.valueOf(payload.getOrDefault("toolName", "unknown-tool")),
-                "toolCallId", String.valueOf(payload.getOrDefault("toolCallId", "pending-id")),
-                "reasoning", String.valueOf(payload.getOrDefault("reasoning", "")),
-                "arguments", String.valueOf(payload.getOrDefault("arguments", "{}")),
-                "displayArguments", String.valueOf(payload.getOrDefault("displayArguments", payload.getOrDefault("arguments", "{}"))),
-                "actions", actions));
+            Map<String, Object> response = new HashMap<>();
+            response.put("status", "OK");
+            response.put("sessionUuid", sessionUuid);
+            response.put("sessionStatus", String.valueOf(session.status()));
+            response.put("eventId", frame.eventId());
+            response.put("toolName", toolName);
+            response.put("toolCallId", toolCallId);
+            response.put("reasoning", frame.textResponse() == null ? "" : frame.textResponse());
+            response.put("arguments", arguments);
+            response.put("displayArguments", displayArguments);
+            response.put("actions", actions);
+            response.put("formSchema", schema);
+            return ResponseEntity.ok(response);
         } catch (IllegalStateException ex) {
             return ResponseEntity.status(HttpStatus.NOT_FOUND)
                 .body(Map.of(
@@ -513,7 +529,7 @@ public class ChatAuthorizationController {
     }
 
     private String toolResponseDataForAction(String action,
-                                             Map<String, Object> fields,
+                                             Map<String, String> fields,
                                              String toolName,
                                              String argumentsJson) {
         switch (action) {
@@ -778,11 +794,62 @@ public class ChatAuthorizationController {
         }
     }
 
-    public record AuthorizationResponseRequest(
+    public record InteractionResponse(
             String eventId,
+            String intent,
             String action,
-            Map<String, Object> fields
+            Map<String, String> fields
     ) {}
+
+    private static VorkUser toPrincipalUser(String username) {
+        return new VorkUser(username, "", "USER", 0L, 0L);
+    }
+
+    private static Map<String, FieldSource> buildFieldSourceMap(InteractionFormSchema schema) {
+        if (schema == null || schema.fields() == null) {
+            return Map.of();
+        }
+        Map<String, FieldSource> map = new HashMap<>();
+        for (FormField field : schema.fields()) {
+            if (field == null || field.name() == null || field.name().isBlank()) {
+                continue;
+            }
+            map.put(field.name(), field.source() == null ? FieldSource.CONVERSATION : field.source());
+        }
+        return map;
+    }
+
+    private static String extractPendingArguments(AiChatMessage promptMessage, String toolCallId) {
+        if (promptMessage.toolCalls() == null || promptMessage.toolCalls().isEmpty()) {
+            return "{}";
+        }
+        for (AiChatMessage.ToolCallRef call : promptMessage.toolCalls()) {
+            if (call == null) {
+                continue;
+            }
+            if (toolCallId != null && toolCallId.equals(call.id())) {
+                return call.arguments() == null ? "{}" : call.arguments();
+            }
+        }
+        AiChatMessage.ToolCallRef first = promptMessage.toolCalls().get(0);
+        return first.arguments() == null ? "{}" : first.arguments();
+    }
+
+    private String formatDisplayArguments(String toolName, String arguments) {
+        String raw = (arguments == null || arguments.isBlank()) ? "{}" : arguments;
+        ToolCallback callback = toolCallbacksByName.get(toolName);
+        if (callback instanceof VisualizableTool visualizableTool) {
+            try {
+                String formatted = visualizableTool.formatAuthorizationDetails(raw);
+                if (formatted != null && !formatted.isBlank()) {
+                    return formatted;
+                }
+            } catch (Exception ignored) {
+                // Fall through to raw arguments.
+            }
+        }
+        return raw;
+    }
 
     private static String abbreviate(String value, int maxLen) {
         if (value == null) {

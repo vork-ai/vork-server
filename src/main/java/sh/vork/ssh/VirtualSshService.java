@@ -27,7 +27,6 @@ import com.sshtools.server.AbstractSshServer;
 import com.sshtools.server.DefaultServerChannelFactory;
 import com.sshtools.server.InMemoryPublicKeyAuthenticator;
 import com.sshtools.server.SshServerContext;
-import com.sshtools.server.vsession.UnsupportedCommandException;
 import com.sshtools.server.vsession.commands.os.NativeSessionChannel;
 import com.sshtools.synergy.nio.ConnectRequestFuture;
 import com.sshtools.synergy.nio.SshEngineContext;

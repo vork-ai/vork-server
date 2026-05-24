@@ -47,7 +47,9 @@ public class SecurityConfig {
             .logout(logout -> logout
                 .logoutUrl("/logout")
                 .logoutSuccessUrl("/login?logout=true")
-                .deleteCookies("VORK_REMEMBER_ME")
+                .invalidateHttpSession(true)
+                .clearAuthentication(true)
+                .deleteCookies("VORK_REMEMBER_ME", "JSESSIONID")
                 .permitAll()
             )
             .rememberMe(rememberMe -> rememberMe

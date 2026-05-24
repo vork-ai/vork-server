@@ -53,7 +53,7 @@ class AiJobRunnerLifecycleTest {
     }
 
     @Test
-    void oneShotJob_pausesWhenTrackingSessionAwaitsAuthorization() {
+    void oneShotJob_pausesWhenTrackingSessionAwaitsInput() {
         MapDatabaseRepository<ScheduledJob> jobRepo = new MapDatabaseRepository<>(ScheduledJob.class);
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
 
@@ -70,7 +70,7 @@ class AiJobRunnerLifecycleTest {
 
         jobRepo.save(job);
 
-        CompletingEngine engine = new CompletingEngine(sessionRepo, AiSessionStatus.AWAITING_AUTHORIZATION);
+        CompletingEngine engine = new CompletingEngine(sessionRepo, AiSessionStatus.AWAITING_INPUT);
         AiJobRunner runner = new AiJobRunner(job, engine, jobRepo, sessionRepo);
 
         runner.run();
@@ -102,6 +102,7 @@ class AiJobRunnerLifecycleTest {
                     current.provider(),
                     SessionOriginMode.BACKGROUND,
                     current.username(),
+                    current.name(),
                     current.createdAt(),
                     current.currentRoundCount(),
                     withSyntheticAssistantMessage(current.messages()),

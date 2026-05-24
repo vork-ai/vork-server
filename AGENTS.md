@@ -8,6 +8,12 @@ is handled automatically via Jackson — no annotations are required on the reco
 
 ---
 
+## CLEAN-SLATE PROTOCOL
+
+Backward compatibility is explicitly forbidden. Do not introduce fallback overloads, compatibility layers, or deprecated methods to keep old call sites compiling. Rewrite all affected upstream and downstream components, configurations, and test classes to natively support the new schema directly.
+
+---
+
 ## Core Contracts
 
 ### `DatabaseEntity`

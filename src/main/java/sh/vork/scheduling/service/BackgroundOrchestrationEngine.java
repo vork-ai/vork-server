@@ -12,7 +12,7 @@ import sh.vork.ai.AiProvider;
 import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiSession;
 import sh.vork.ai.entity.AiSessionStatus;
-import sh.vork.ai.security.ToolSuspensionException;
+import sh.vork.ai.exception.ToolSuspensionException;
 import sh.vork.ai.service.ChatService;
 import sh.vork.database.DatabaseRepository;
 
@@ -101,7 +101,7 @@ public class BackgroundOrchestrationEngine {
                 if (afterTurn == null) {
                     return;
                 }
-                if (afterTurn.status() == AiSessionStatus.AWAITING_AUTHORIZATION) {
+                if (afterTurn.status() == AiSessionStatus.AWAITING_INPUT) {
                     log.info("Background loop awaiting authorization [session={}]", sessionUuid);
                     return;
                 }

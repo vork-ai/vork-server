@@ -306,6 +306,7 @@ public class TerminalStreamRouter {
         return normalized;
     }
 
+    @SuppressWarnings("removal")
     private ActiveTerminalSession createShellSession(String sessionUuid, String host) {
         try {
             SshClient client = virtualSshService.connectClient(10);

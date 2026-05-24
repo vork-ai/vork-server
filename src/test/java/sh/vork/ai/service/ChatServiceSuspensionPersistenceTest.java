@@ -22,11 +22,14 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import sh.vork.ai.AiProvider;
 import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.entity.SessionOriginMode;
+import sh.vork.ai.exception.ToolSuspensionException;
 import sh.vork.ai.protocol.UiEventFrame;
-import sh.vork.ai.security.ToolSuspensionException;
 import sh.vork.ai.security.VisualizableToolCallback;
 import sh.vork.database.mock.MapDatabaseRepository;
 import sh.vork.storage.FileStorageService;
+import sh.vork.scheduling.service.SystemNotificationService;
 
 class ChatServiceSuspensionPersistenceTest {
 
@@ -39,7 +42,16 @@ class ChatServiceSuspensionPersistenceTest {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
 
         String sessionId = "session-1";
-        AiSession initial = new AiSession(sessionId, AiProvider.GEMINI.name(), 123L, List.of(), null);
+        AiSession initial = new AiSession(
+            sessionId,
+            AiProvider.GEMINI.name(),
+            SessionOriginMode.WEB,
+                "anonymous",
+            "Untitled",
+            123L,
+            0,
+            List.of(),
+            AiSessionStatus.RUNNING);
         sessionRepo.save(initial);
 
         when(aiService.generateWithHistory(org.mockito.ArgumentMatchers.<org.springframework.ai.chat.messages.Message>anyList(),
@@ -69,7 +81,9 @@ class ChatServiceSuspensionPersistenceTest {
             fileStorageService,
             messaging,
             objectMapper,
-            List.of(compileTool));
+            List.of(compileTool),
+            mock(SystemNotificationService.class),
+            Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "please compile", null, AiProvider.GEMINI);
 
@@ -77,7 +91,7 @@ class ChatServiceSuspensionPersistenceTest {
 
         AiSession saved = sessionRepo.get(sessionId);
         assertNotNull(saved);
-        assertEquals("AWAITING_AUTHORIZATION", saved.status());
+        assertEquals(AiSessionStatus.AWAITING_INPUT, saved.status());
         assertEquals(2, saved.messages().size(), "Expected persisted USER + PROMPT_REQUIRED messages");
 
         AiChatMessage user = saved.messages().get(0);
@@ -89,11 +103,14 @@ class ChatServiceSuspensionPersistenceTest {
         UiEventFrame frame = objectMapper.readValue(awaiting.content(), UiEventFrame.class);
         assertEquals("PROMPT_REQUIRED", frame.type());
         assertEquals("AUTHORIZE_TOOL", frame.intent());
-        assertEquals("compileJavaType", String.valueOf(frame.payload().get("toolName")));
         assertEquals("Approval is required to compile and register a new Java type so it can be used in later steps.",
-            String.valueOf(frame.payload().get("reasoning")));
-        assertEquals("{\"source\":\"class Demo {}\"}", String.valueOf(frame.payload().get("arguments")));
-        assertEquals("```java\nclass Demo {}\n```", String.valueOf(frame.payload().get("displayArguments")));
+            frame.textResponse());
+        assertNotNull(frame.formSchema());
+        assertEquals("AUTHORIZE_TOOL", frame.formSchema().intent());
+        assertEquals(List.of("ONCE", "SESSION", "ALWAYS", "DENIED"),
+            frame.formSchema().actions().stream().map(a -> a.name()).toList());
+        assertEquals("Confirm whether this protected tool call should run.",
+            frame.formSchema().description());
         assertNotNull(awaiting.toolCalls());
         assertEquals(1, awaiting.toolCalls().size());
 
@@ -102,14 +119,8 @@ class ChatServiceSuspensionPersistenceTest {
         assertEquals("compileJavaType", tool.name());
         assertEquals("{\"source\":\"class Demo {}\"}", tool.arguments());
         assertTrue(tool.id().startsWith("pending-"));
-        assertEquals(tool.id(), String.valueOf(frame.payload().get("toolCallId")));
-
-        @SuppressWarnings("unchecked")
-        List<String> actions = (List<String>) frame.payload().get("actions");
-        assertEquals(List.of("ONCE", "SESSION", "ALWAYS", "DENIED"), actions);
-
-        assertNull(awaiting.toolCallId());
-        assertNull(awaiting.toolName());
+        assertEquals(tool.id(), awaiting.toolCallId());
+        assertEquals("compileJavaType", awaiting.toolName());
 
         verify(messaging).convertAndSend(anyString(), any(UiEventFrame.class));
     }

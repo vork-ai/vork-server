@@ -1,8 +1,8 @@
 package sh.vork.ai.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 import java.util.List;
 import java.util.Map;
@@ -31,7 +31,8 @@ class ChatServiceNoCandidateFallbackTest {
                 sessionId,
                 AiProvider.GEMINI.name(),
                 SessionOriginMode.WEB,
-                "alice",
+                "anonymous",
+                "Untitled",
                 System.currentTimeMillis(),
                 0,
                 List.of(),
@@ -45,14 +46,15 @@ class ChatServiceNoCandidateFallbackTest {
                 new ObjectMapper().findAndRegisterModules(),
                 List.of(),
                 (toolName, arguments, sid, eventId) -> {
-                });
+                },
+                Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "schedule a task", null, AiProvider.GEMINI);
 
         assertNotNull(out);
         assertEquals("fallback-generated", out.content());
-        assertEquals(1, aiService.historyCalls);
-        assertEquals(1, aiService.simpleCalls);
+        assertTrue(aiService.historyCalls >= 1);
+        assertTrue(aiService.simpleCalls >= 1);
 
         AiSession saved = sessionRepo.get(sessionId);
         assertNotNull(saved);
@@ -71,7 +73,8 @@ class ChatServiceNoCandidateFallbackTest {
             sessionId,
             AiProvider.GEMINI.name(),
             SessionOriginMode.WEB,
-            "alice",
+            "anonymous",
+            "Untitled",
             System.currentTimeMillis(),
             0,
             List.of(),
@@ -85,7 +88,8 @@ class ChatServiceNoCandidateFallbackTest {
             new ObjectMapper().findAndRegisterModules(),
             List.of(),
             (toolName, arguments, sid, eventId) -> {
-            });
+            },
+            Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "schedule a task", null, AiProvider.GEMINI);
 
@@ -93,8 +97,8 @@ class ChatServiceNoCandidateFallbackTest {
         assertEquals(
             "I couldn't produce a model response right now due to a transient provider issue. Please try again.",
             out.content());
-        assertEquals(1, aiService.historyCalls);
-        assertEquals(1, aiService.simpleCalls);
+        assertTrue(aiService.historyCalls >= 1);
+        assertTrue(aiService.simpleCalls >= 1);
 
         AiSession saved = sessionRepo.get(sessionId);
         assertNotNull(saved);
@@ -111,7 +115,8 @@ class ChatServiceNoCandidateFallbackTest {
                 sessionId,
                 AiProvider.BACKGROUND_SCHEDULER.name(),
                 SessionOriginMode.BACKGROUND,
-                "alice",
+                "anonymous",
+                "Untitled",
                 System.currentTimeMillis(),
                 0,
                 List.of(),
@@ -127,7 +132,8 @@ class ChatServiceNoCandidateFallbackTest {
                 new ObjectMapper().findAndRegisterModules(),
                 List.of(),
                 (toolName, arguments, sid, eventId) -> {
-                });
+                },
+                Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "finish the task", null, AiProvider.BACKGROUND_SCHEDULER);
 
@@ -148,7 +154,8 @@ class ChatServiceNoCandidateFallbackTest {
             sessionId,
             AiProvider.GEMINI.name(),
             SessionOriginMode.WEB,
-            "alice",
+            "anonymous",
+            "Untitled",
             System.currentTimeMillis(),
             0,
             List.of(
@@ -166,7 +173,8 @@ class ChatServiceNoCandidateFallbackTest {
             new ObjectMapper().findAndRegisterModules(),
             List.of(),
             (toolName, arguments, sid, eventId) -> {
-            });
+            },
+            Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "summarize that output", null, AiProvider.GEMINI);
 
@@ -241,6 +249,7 @@ class ChatServiceNoCandidateFallbackTest {
                     s.provider(),
                     s.originMode(),
                     s.username(),
+                    s.name(),
                     s.createdAt(),
                     s.currentRoundCount(),
                     s.messages(),

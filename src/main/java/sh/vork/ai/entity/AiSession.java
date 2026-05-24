@@ -51,43 +51,4 @@ public record AiSession(
             status = AiSessionStatus.RUNNING;
         }
     }
-
-    /** Backward-compatible constructor for sessions created before the status field. */
-    public AiSession(String uuid, String provider, long createdAt, List<AiChatMessage> messages) {
-        this(uuid, provider, SessionOriginMode.WEB, "anonymous", "Untitled", createdAt, 0, messages,
-                AiSessionStatus.RUNNING);
-    }
-
-    /** Backward-compatible constructor for sessions created before the username field. */
-    public AiSession(String uuid, String provider, long createdAt, List<AiChatMessage> messages, String status) {
-        this(uuid, provider, SessionOriginMode.WEB, "anonymous", "Untitled", createdAt, 0, messages,
-                parseLegacyStatus(status));
-    }
-
-    /** Backward-compatible constructor for sessions created before the originMode field. */
-    public AiSession(String uuid, String provider, String username, long createdAt,
-                     List<AiChatMessage> messages, AiSessionStatus status) {
-        this(uuid, provider, SessionOriginMode.WEB, username, "Untitled", createdAt, 0, messages, status);
-    }
-
-    /** Backward-compatible constructor for sessions created before enum migration. */
-    public AiSession(String uuid, String provider, String username, long createdAt,
-                     List<AiChatMessage> messages, String status) {
-        this(uuid, provider, SessionOriginMode.WEB, username, "Untitled", createdAt, 0, messages,
-                parseLegacyStatus(status));
-    }
-
-    private static AiSessionStatus parseLegacyStatus(String legacyStatus) {
-        if (legacyStatus == null || legacyStatus.isBlank()) {
-            return AiSessionStatus.RUNNING;
-        }
-        if ("AWAITING_INPUT".equals(legacyStatus)) {
-            return AiSessionStatus.AWAITING_AUTHORIZATION;
-        }
-        try {
-            return AiSessionStatus.valueOf(legacyStatus);
-        } catch (IllegalArgumentException ex) {
-            return AiSessionStatus.RUNNING;
-        }
-    }
 }

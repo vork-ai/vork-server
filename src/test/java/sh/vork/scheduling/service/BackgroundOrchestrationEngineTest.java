@@ -20,7 +20,7 @@ import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiSession;
 import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.ai.entity.SessionOriginMode;
-import sh.vork.ai.security.ToolSuspensionException;
+import sh.vork.ai.exception.ToolSuspensionException;
 import sh.vork.ai.service.AiOrchestrationService;
 import sh.vork.ai.service.ChatService;
 import sh.vork.database.mock.MapDatabaseRepository;
@@ -41,6 +41,7 @@ class BackgroundOrchestrationEngineTest {
                 AiProvider.BACKGROUND_SCHEDULER.name(),
                 SessionOriginMode.BACKGROUND,
                 "alice",
+                "Untitled",
                 System.currentTimeMillis(),
                 10,
                 List.of(),
@@ -69,6 +70,7 @@ class BackgroundOrchestrationEngineTest {
                 AiProvider.BACKGROUND_SCHEDULER.name(),
                 SessionOriginMode.BACKGROUND,
                 "alice",
+                "Untitled",
                 System.currentTimeMillis(),
                 0,
                 List.of(),
@@ -96,6 +98,7 @@ class BackgroundOrchestrationEngineTest {
                 AiProvider.BACKGROUND_SCHEDULER.name(),
                 SessionOriginMode.BACKGROUND,
                 "alice",
+                "Untitled",
                 System.currentTimeMillis(),
                 0,
                 List.of(),
@@ -133,7 +136,8 @@ class BackgroundOrchestrationEngineTest {
                     new ObjectMapper().findAndRegisterModules(),
                     List.<ToolCallback>of(),
                     (toolName, arguments, sessionUuid, eventId) -> {
-                    });
+                    },
+                    Runnable::run);
             this.sessionRepo = sessionRepo;
             this.context = context;
             this.mode = mode;
@@ -153,6 +157,7 @@ class BackgroundOrchestrationEngineTest {
                         s.provider(),
                         s.originMode(),
                         s.username(),
+                        s.name(),
                         s.createdAt(),
                         s.currentRoundCount(),
                         s.messages(),
