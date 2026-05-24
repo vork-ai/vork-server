@@ -39,6 +39,7 @@ const TERMINAL_ROW_PREFIX = 'terminal-';
 const TERMINAL_REPLAY_MAX_CHARS = 24000;
 const TERMINAL_REPLAY_TAIL_CHARS = 12000;
 const TERMINAL_COLLAPSED_HEIGHT = '1.6rem';
+const TERMINAL_END_GRACE_MS = 160;
 const textDecoder = new TextDecoder();
 const textEncoder = new TextEncoder();
 const ANSI_ESCAPE_PATTERN = /\u001B\[[0-9;?]*[ -/]*[@-~]/g;
@@ -85,6 +86,10 @@ function setAwaitingPostTerminalResponse(on) {
     }
 }
 
+function isTerminalToolMessage(msg) {
+    return !!(msg && msg.role === 'TOOL' && msg.toolName === 'executeTerminalCommand');
+}
+
 function getTerminalWsUrl(terminalId) {
     const proto = window.location.protocol === 'https:' ? 'wss://' : 'ws://';
     return proto + window.location.host + '/ws/terminal/' + encodeURIComponent(sessionUuid) + '/' + encodeURIComponent(terminalId);
@@ -113,6 +118,13 @@ function connectTerminalSocket(view) {
 
     const socket = new WebSocket(getTerminalWsUrl(terminalId));
     socket.binaryType = 'arraybuffer';
+
+    socket.onopen = function () {
+        view.socketConnected = true;
+        if (view.endReceived) {
+            scheduleTerminalFinalize(view, 80);
+        }
+    };
 
     // Instrumentation for measuring data transfer
     const stats = {
@@ -154,6 +166,9 @@ function connectTerminalSocket(view) {
             const chunk = textDecoder.decode(new Uint8Array(event.data));
             writeChunkToTerminalView(view, chunk);
         }
+        if (view.endReceived) {
+            scheduleTerminalFinalize(view, 80);
+        }
         scrollBottom();
     };
 
@@ -167,6 +182,10 @@ function connectTerminalSocket(view) {
         }
         if (terminalState.socketsByTerminal.get(terminalId) === socket) {
             terminalState.socketsByTerminal.delete(terminalId);
+        }
+        view.socketConnected = false;
+        if (view.endReceived) {
+            scheduleTerminalFinalize(view, 0);
         }
     };
 
@@ -354,11 +373,14 @@ function createTerminalInlineRow(terminalId, command, options) {
         pendingWrite: '',
         pendingWriteScheduled: false,
         endReceived: false,
+        endReceivedAt: 0,
         live: false,
         completed: false,
         expanded: expanded,
         command: command || 'Live Terminal Stream',
-        attachmentUuid: null
+        attachmentUuid: null,
+        socketConnected: false,
+        finalizeTimer: null
     };
 
     view.toggleBtn.addEventListener('click', function () {
@@ -454,6 +476,14 @@ function maybeFinalizeTerminalView(view) {
         return;
     }
 
+    if (view.live) {
+        const elapsed = view.endReceivedAt > 0 ? (Date.now() - view.endReceivedAt) : 0;
+        if (elapsed < TERMINAL_END_GRACE_MS) {
+            scheduleTerminalFinalize(view, TERMINAL_END_GRACE_MS - elapsed + 10);
+            return;
+        }
+    }
+
     // Flush any pending batched writes before disposing the terminal
     if (view.terminal && view.pendingWrite) {
         view.terminal.write(view.pendingWrite);
@@ -468,6 +498,10 @@ function maybeFinalizeTerminalView(view) {
         view.terminal = null;
     }
     view.fitAddon = null;
+    if (view.finalizeTimer) {
+        clearTimeout(view.finalizeTimer);
+        view.finalizeTimer = null;
+    }
     markTerminalCompleted(view);
 
     view.passivePre.textContent = buildPassiveTranscript(view);
@@ -475,10 +509,23 @@ function maybeFinalizeTerminalView(view) {
     view.xtermContainer.classList.add('d-none');
     setTerminalExpanded(view, view.expanded);
 
-    if (!hasLiveTerminal()) {
+    if (!hasLiveTerminal() && !awaitingPostTerminalResponse) {
         setInputEnabled(true);
         focusMessageInput();
     }
+}
+
+function scheduleTerminalFinalize(view, delayMs) {
+    if (!view) {
+        return;
+    }
+    if (view.finalizeTimer) {
+        clearTimeout(view.finalizeTimer);
+    }
+    view.finalizeTimer = setTimeout(function () {
+        view.finalizeTimer = null;
+        maybeFinalizeTerminalView(view);
+    }, Math.max(0, delayMs || 0));
 }
 
 function setTerminalExpanded(view, expanded) {
@@ -559,6 +606,7 @@ function cleanupTerminalLiveBindings(view) {
     }
     view.dataListener = null;
     view.live = false;
+    view.socketConnected = false;
 }
 
 function hasLiveTerminal() {
@@ -590,8 +638,14 @@ function handleTerminalStart(frame) {
     view.bufferedText = '';
     view.pendingChunks = [];
     view.endReceived = false;
+    view.endReceivedAt = 0;
     view.live = true;
     view.completed = false;
+    view.socketConnected = false;
+    if (view.finalizeTimer) {
+        clearTimeout(view.finalizeTimer);
+        view.finalizeTimer = null;
+    }
 
     view.passivePre.classList.add('d-none');
     view.xtermContainer.classList.remove('d-none');
@@ -661,10 +715,9 @@ function handleTerminalData(frame) {
 
 function handleTerminalEnd(frame) {
     const terminalId = frame && typeof frame.terminalId === 'string' ? frame.terminalId : null;
+    setAwaitingPostTerminalResponse(true);
+
     if (!terminalId) {
-        if (!hasLiveTerminal()) {
-            setAwaitingPostTerminalResponse(true);
-        }
         return;
     }
 
@@ -673,19 +726,14 @@ function handleTerminalEnd(frame) {
     if (!view) {
         const pending = getPendingTerminalState(terminalId);
         pending.endReceived = true;
-        if (!hasLiveTerminal()) {
-            setAwaitingPostTerminalResponse(true);
-        }
         return;
     }
 
     view.endReceived = true;
+    view.endReceivedAt = Date.now();
     flushTerminalChunks(view);
-    maybeFinalizeTerminalView(view);
+    scheduleTerminalFinalize(view, TERMINAL_END_GRACE_MS);
 
-    if (!hasLiveTerminal()) {
-        setAwaitingPostTerminalResponse(true);
-    }
 }
 
 function renderTerminalTranscript(terminalId, command, output, expanded, attachment) {
@@ -722,7 +770,13 @@ function attachTerminalHeaderFile(view, attachment) {
     view.actions.appendChild(link);
 }
 
-function findBestTerminalViewForToolResult(command) {
+function findBestTerminalViewForToolResult(command, terminalId) {
+    if (terminalId) {
+        const exact = findTerminalView(terminalId);
+        if (exact) {
+            return exact;
+        }
+    }
     const views = Array.from(terminalState.views.values());
     for (let i = views.length - 1; i >= 0; i -= 1) {
         const view = views[i];
@@ -747,7 +801,7 @@ async function renderLiveToolMessage(msg) {
     const attachment = Array.isArray(msg.attachments) && msg.attachments.length > 0
         ? msg.attachments[0]
         : null;
-    const existing = findBestTerminalViewForToolResult(transcript.command);
+    const existing = findBestTerminalViewForToolResult(transcript.command, transcript.terminalId);
     if (existing) {
         attachTerminalHeaderFile(existing, attachment || (transcript.outputFileUuid ? {
             uuid: transcript.outputFileUuid,
@@ -797,6 +851,7 @@ function tryGetTerminalTranscript(msg) {
     }
     const transcript = payload.terminalTranscript;
     return {
+        terminalId: typeof transcript.terminalId === 'string' ? transcript.terminalId : null,
         command: typeof transcript.command === 'string' ? transcript.command : 'terminal command',
         output: typeof transcript.output === 'string' ? transcript.output : '',
         outputFileUuid: typeof transcript.outputFileUuid === 'string' ? transcript.outputFileUuid : null
@@ -816,7 +871,7 @@ async function renderTerminalSessionRecord(msg, index, messages) {
         transcript.outputFileUuid || (attachment ? attachment.uuid : null),
         transcript.output
     );
-    renderTerminalTranscript(msg.uuid, transcript.command, output, expanded, attachment);
+    renderTerminalTranscript(transcript.terminalId || msg.uuid, transcript.command, output, expanded, attachment);
     return true;
 }
 
@@ -1034,12 +1089,14 @@ function handleIncomingUiFrame(frame) {
 
     switch (frame.type) {
         case 'PROMPT_REQUIRED':
+            setAwaitingPostTerminalResponse(false);
             renderPromptRequiredFrame(frame);
             setInputEnabled(true);
             showTyping(false);
             return;
 
         case 'TEXT_RESPONSE':
+            setAwaitingPostTerminalResponse(false);
             if (frame.payload && frame.payload.message && typeof frame.payload.message === 'object') {
                 renderMessage(frame.payload.message);
                 return;
@@ -1056,6 +1113,7 @@ function handleIncomingUiFrame(frame) {
             return;
 
         case 'ERROR':
+            setAwaitingPostTerminalResponse(false);
             renderMessage({
                 role: 'ERROR',
                 content: (typeof frame.textResponse === 'string' && frame.textResponse)
@@ -1377,23 +1435,27 @@ function subscribeToCurrentSession() {
             return;
         }
 
-        setAwaitingPostTerminalResponse(false);
-        showTyping(false);
-        if (!hasLiveTerminal()) {
-            setInputEnabled(true);
+        if (isTerminalToolMessage(msg)) {
+            setAwaitingPostTerminalResponse(true);
+        } else {
+            setAwaitingPostTerminalResponse(false);
+            showTyping(false);
+            if (!hasLiveTerminal()) {
+                setInputEnabled(true);
+            }
         }
 
         if (isUiEventFrame(msg)) {
             handleIncomingUiFrame(msg);
         } else {
-            if (msg && msg.role === 'TOOL') {
+            if (isTerminalToolMessage(msg)) {
                 renderLiveToolMessage(msg);
             } else {
                 renderMessage(msg);
             }
         }
 
-        if (!hasLiveTerminal()) {
+        if (!hasLiveTerminal() && !awaitingPostTerminalResponse) {
             focusMessageInput();
         }
     });

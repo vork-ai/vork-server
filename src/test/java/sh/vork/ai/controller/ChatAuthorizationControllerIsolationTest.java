@@ -85,6 +85,7 @@ class ChatAuthorizationControllerIsolationTest {
 
         assertEquals("WEB_RESUMED", response.getBody().get("status"));
         assertTrue(aiService.generateWithHistoryCalls > 0);
+        assertTrue(aiService.lastNewUserMessage.contains("Do not call tools again"));
 
         AiSession saved = sessionRepo.get(sessionUuid);
         assertNotNull(saved);
@@ -313,6 +314,127 @@ class ChatAuthorizationControllerIsolationTest {
     }
 
     @Test
+    void respond_executeTerminalCommand_includesTerminalIdentityInTranscript() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+
+        String sessionUuid = "session-terminal-id";
+        AiChatMessage prompt = promptMessage(
+                "evt-terminal-id",
+                "executeTerminalCommand",
+                "pending-terminal-id",
+                "{\"command\":\"uname -a\"}",
+                "Need approval");
+
+        sessionRepo.save(new AiSession(
+                sessionUuid,
+                AiProvider.GEMINI.name(),
+                SessionOriginMode.WEB,
+                "alice",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(prompt),
+                AiSession.defaultEnvironmentVariables(),
+                AiSessionStatus.AWAITING_INPUT));
+
+        ToolCallback terminalTool = FunctionToolCallback.builder("executeTerminalCommand",
+                (ExecuteTerminalCommandRequest req) -> "{\"status\":\"COMPLETED\",\"command\":\"uname -a\",\"terminalId\":\"term-123\",\"outputFileUuid\":\"file-123\",\"output\":\"Darwin test-host\"}")
+                .description("Execute a terminal command")
+                .inputType(ExecuteTerminalCommandRequest.class)
+                .build();
+
+        ChatAuthorizationController controller = new ChatAuthorizationController(
+                sessionRepo,
+                new AuthorizationRuleEngine(List.of(), null),
+                new RecordingAiService("terminal-final"),
+                new SimpMessagingTemplate(new NoOpMessageChannel()),
+                objectMapper,
+                List.of(terminalTool),
+                Runnable::run,
+                new RecordingSchedulerService(),
+                null,
+                null,
+                new SecureCredentialStore(),
+                null);
+
+        controller.respond(sessionUuid,
+                new ChatAuthorizationController.InteractionResponse("evt-terminal-id", "AUTHORIZE_TOOL", "ONCE", Map.of()));
+
+        AiSession saved = sessionRepo.get(sessionUuid);
+        assertNotNull(saved);
+        AiChatMessage toolMessage = saved.messages().stream().filter(m -> "TOOL".equals(m.role())).findFirst().orElseThrow();
+
+        @SuppressWarnings("unchecked")
+        Map<String, Object> payload = objectMapper.readValue(toolMessage.content(), Map.class);
+        @SuppressWarnings("unchecked")
+        Map<String, Object> transcript = (Map<String, Object>) payload.get("terminalTranscript");
+        assertNotNull(transcript);
+        assertEquals("term-123", transcript.get("terminalId"));
+        assertEquals("file-123", transcript.get("outputFileUuid"));
+    }
+
+    @Test
+    void respond_whenModelContinuationFails_persistsToolAndErrorMessages() throws Exception {
+        ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+
+        String sessionUuid = "session-terminal-failure";
+        AiChatMessage prompt = promptMessage(
+                "evt-terminal-failure",
+                "executeTerminalCommand",
+                "pending-terminal-failure",
+                "{\"command\":\"whoami\"}",
+                "Need approval");
+
+        sessionRepo.save(new AiSession(
+                sessionUuid,
+                AiProvider.GEMINI.name(),
+                SessionOriginMode.WEB,
+                "alice",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(prompt),
+                AiSession.defaultEnvironmentVariables(),
+                AiSessionStatus.AWAITING_INPUT));
+
+        ToolCallback terminalTool = FunctionToolCallback.builder("executeTerminalCommand",
+                (ExecuteTerminalCommandRequest req) -> "{\"status\":\"COMPLETED\",\"command\":\"whoami\",\"terminalId\":\"term-fail\",\"output\":\"alice\"}")
+                .description("Execute a terminal command")
+                .inputType(ExecuteTerminalCommandRequest.class)
+                .build();
+
+        ChatAuthorizationController controller = new ChatAuthorizationController(
+                sessionRepo,
+                new AuthorizationRuleEngine(List.of(), null),
+                new FailingAiService(),
+                new SimpMessagingTemplate(new NoOpMessageChannel()),
+                objectMapper,
+                List.of(terminalTool),
+                Runnable::run,
+                new RecordingSchedulerService(),
+                null,
+                null,
+                new SecureCredentialStore(),
+                null);
+
+        ResponseEntity<Map<String, Object>> response = controller.respond(
+                sessionUuid,
+                new ChatAuthorizationController.InteractionResponse("evt-terminal-failure", "AUTHORIZE_TOOL", "ONCE", Map.of()));
+
+        assertEquals(500, response.getStatusCode().value());
+        assertEquals("ERROR", response.getBody().get("status"));
+
+        AiSession saved = sessionRepo.get(sessionUuid);
+        assertNotNull(saved);
+        long toolCount = saved.messages().stream().filter(m -> "TOOL".equals(m.role())).count();
+        long errorCount = saved.messages().stream().filter(m -> "ERROR".equals(m.role())).count();
+        assertEquals(1, toolCount);
+        assertEquals(1, errorCount);
+    }
+
+    @Test
     void respond_toolExecutionSuspension_returnsAwaitingInputAndPersistsPrompt() throws Exception {
         ObjectMapper objectMapper = new ObjectMapper().findAndRegisterModules();
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
@@ -425,6 +547,7 @@ class ChatAuthorizationControllerIsolationTest {
     private static final class RecordingAiService extends AiOrchestrationService {
         private final String nextOutput;
         private int generateWithHistoryCalls;
+        private String lastNewUserMessage;
 
         private RecordingAiService(String nextOutput) {
             super(Map.of(), null);
@@ -436,6 +559,7 @@ class ChatAuthorizationControllerIsolationTest {
                                           String newUserMessage,
                                           AiProvider provider) {
             generateWithHistoryCalls++;
+            lastNewUserMessage = newUserMessage;
             return nextOutput;
         }
     }
@@ -452,6 +576,19 @@ class ChatAuthorizationControllerIsolationTest {
             this.lastResumedSessionUuid = sessionUuid;
         }
     }
+
+        private static final class FailingAiService extends AiOrchestrationService {
+                private FailingAiService() {
+                        super(Map.of(), null);
+                }
+
+                @Override
+                public String generateWithHistory(List<org.springframework.ai.chat.messages.Message> conversationHistory,
+                                                                                  String newUserMessage,
+                                                                                  AiProvider provider) {
+                        throw new IllegalStateException("simulated model continuation failure");
+                }
+        }
 
     private static final class NoOpMessageChannel implements MessageChannel {
         @Override

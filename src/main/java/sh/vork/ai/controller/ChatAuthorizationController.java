@@ -71,6 +71,7 @@ import sh.vork.storage.FileStorageService;
 public class ChatAuthorizationController {
 
     private static final Logger log = LoggerFactory.getLogger(ChatAuthorizationController.class);
+    private static final int TERMINAL_HISTORY_OUTPUT_MAX_CHARS = 24_000;
 
     private final DatabaseRepository<AiSession> sessionRepo;
     private final AuthorizationRuleEngine authorizationRuleEngine;
@@ -275,16 +276,22 @@ public class ChatAuthorizationController {
                 Object fileUuidObj = terminalTranscript.get("outputFileUuid");
                 if (fileUuidObj != null && fileStorageService != null) {
                     String fileUuid = String.valueOf(fileUuidObj);
-                    sh.vork.storage.StoredFile storedFile = fileStorageService.getMetadata(fileUuid);
-                    if (storedFile != null) {
-                        attachments = List.of(
-                            new AiChatMessage.AttachmentRef(
-                                storedFile.uuid(),
-                                storedFile.originalName(),
-                                storedFile.mimeType()
-                            )
-                        );
-                        log.info("Terminal output file attached [fileUuid={}, fileName={}]", fileUuid, storedFile.originalName());
+                    try {
+                        sh.vork.storage.StoredFile storedFile = fileStorageService.getMetadata(fileUuid);
+                        if (storedFile != null) {
+                            attachments = List.of(
+                                new AiChatMessage.AttachmentRef(
+                                    storedFile.uuid(),
+                                    storedFile.originalName(),
+                                    storedFile.mimeType()
+                                )
+                            );
+                            log.info("Terminal output file attached [fileUuid={}, fileName={}]", fileUuid, storedFile.originalName());
+                        } else {
+                            log.warn("Terminal output metadata not found for attachment [fileUuid={}]", fileUuid);
+                        }
+                    } catch (Exception ex) {
+                        log.error("Failed to resolve terminal output attachment metadata [fileUuid={}]: {}", fileUuid, ex.getMessage(), ex);
                     }
                 }
             }
@@ -311,6 +318,18 @@ public class ChatAuthorizationController {
 
             if (originMode == SessionOriginMode.WEB) {
                 messaging.convertAndSend("/topic/chat/" + sessionUuid, toolMessage);
+                // Persist tool output immediately so a model continuation failure cannot drop this round.
+                sessionRepo.save(new AiSession(
+                        session.uuid(),
+                        session.provider(),
+                        originMode,
+                        session.username(),
+                        session.name(),
+                        session.createdAt(),
+                        session.currentRoundCount(),
+                        List.copyOf(updated),
+                        session.environmentVariables(),
+                        AiSessionStatus.RUNNING));
             }
 
             if (originMode == SessionOriginMode.BACKGROUND) {
@@ -352,7 +371,8 @@ public class ChatAuthorizationController {
             String finalText;
             ThreadLocalExecutionContext.bindSessionUuid(sessionUuid);
             try {
-                finalText = aiService.generateWithHistory(history, "Please continue based on the tool response.",
+                finalText = aiService.generateWithHistory(history,
+                        "The tool result is already available in the conversation history. Do not call tools again for this turn. Summarize the result for the user and provide any concise next-step guidance.",
                         resolveProvider(session.provider()));
             } catch (ToolSuspensionException ex) {
                 String simulatedToolCallId = "pending-" + UUID.randomUUID();
@@ -403,6 +423,45 @@ public class ChatAuthorizationController {
                     "eventType", suspendedPromptEvent.type(),
                     "eventId", suspendedPromptEvent.eventId(),
                     "toolName", ex.getToolName()
+                ));
+            } catch (Exception ex) {
+                log.error("Resumed model call failed [session={}]: {}", sessionUuid, ex.getMessage(), ex);
+
+                UiEventFrame errorEvent = new UiEventFrame(
+                    UUID.randomUUID().toString(),
+                    "ERROR",
+                    "CHAT_ERROR",
+                    "Failed to continue after tool execution: " + ex.getMessage(),
+                    null);
+
+                updated.add(new AiChatMessage(
+                    UUID.randomUUID().toString(),
+                    "ERROR",
+                    toJson(errorEvent),
+                    System.currentTimeMillis(),
+                    null,
+                    null,
+                    null,
+                    null));
+
+                sessionRepo.save(new AiSession(
+                    session.uuid(),
+                    session.provider(),
+                    originMode,
+                    session.username(),
+                    session.name(),
+                    session.createdAt(),
+                    session.currentRoundCount(),
+                    List.copyOf(updated),
+                    session.environmentVariables(),
+                    AiSessionStatus.RUNNING));
+
+                messaging.convertAndSend("/topic/chat/" + sessionUuid, errorEvent);
+                ThreadLocalExecutionContext.clear();
+
+                return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(Map.of(
+                    "status", "ERROR",
+                    "message", "Failed to continue session after tool execution"
                 ));
             }
 
@@ -658,11 +717,17 @@ public class ChatAuthorizationController {
         Map<String, Object> payload = new HashMap<>();
         payload.put("status", "COMPLETED");
         payload.put("command", command);
+        String terminalId = null;
         String outputFileUuid = null;
         
         // Extract file UUID from tool result if present
         try {
             Map<String, Object> toolResultObj = objectMapper.readValue(toolResult, new TypeReference<Map<String, Object>>() {});
+            Object terminalIdObj = toolResultObj.get("terminalId");
+            if (terminalIdObj != null) {
+                terminalId = String.valueOf(terminalIdObj);
+                payload.put("terminalId", terminalId);
+            }
             Object fileUuid = toolResultObj.get("outputFileUuid");
             if (fileUuid != null) {
                 outputFileUuid = String.valueOf(fileUuid);
@@ -679,10 +744,25 @@ public class ChatAuthorizationController {
         }
 
         String displayOutput = normalizeTerminalTranscript(command, rawOutput);
-        payload.put("rawOutput", rawOutput == null ? "" : rawOutput);
-        payload.put("displayOutput", displayOutput);
+        payload.put("rawOutput", compactTerminalHistoryOutput(rawOutput, outputFileUuid));
+        payload.put("displayOutput", compactTerminalHistoryOutput(displayOutput, outputFileUuid));
         
         return toJson(payload);
+    }
+
+    private String compactTerminalHistoryOutput(String output, String outputFileUuid) {
+        if (output == null || output.isBlank()) {
+            return "";
+        }
+        if (output.length() <= TERMINAL_HISTORY_OUTPUT_MAX_CHARS) {
+            return output;
+        }
+
+        String tail = output.substring(output.length() - TERMINAL_HISTORY_OUTPUT_MAX_CHARS);
+        if (outputFileUuid != null && !outputFileUuid.isBlank()) {
+            return "[terminal output truncated; full output in attachment " + outputFileUuid + "]\n\n" + tail;
+        }
+        return "[terminal output truncated]\n\n" + tail;
     }
 
     private String readTerminalOutputFile(String fileUuid) {
@@ -745,6 +825,11 @@ public class ChatAuthorizationController {
             transcript.put("command", String.valueOf(command));
             transcript.put("output", displayOutput == null ? "" : String.valueOf(displayOutput));
             transcript.put("rawOutput", rawOutput == null ? "" : String.valueOf(rawOutput));
+
+            Object terminalId = payload.get("terminalId");
+            if (terminalId != null) {
+                transcript.put("terminalId", String.valueOf(terminalId));
+            }
             
             // Include file UUID if present
             Object fileUuid = payload.get("outputFileUuid");
