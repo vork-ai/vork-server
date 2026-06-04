@@ -43,6 +43,7 @@ import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.exception.ToolSuspensionException;
 import sh.vork.ai.protocol.UiEventFrame;
+import sh.vork.ai.protocol.StructuredAgentResponse;
 import sh.vork.ai.protocol.interaction.FieldSource;
 import sh.vork.ai.protocol.interaction.FormAction;
 import sh.vork.ai.protocol.interaction.FormField;
@@ -375,13 +376,39 @@ public class ChatAuthorizationController {
             }
 
             log.info("Resuming model call [historyMessages={}]", history.size());
-            String finalText;
+            String finalText = null;
             ToolExecutionContext.bindSessionUuid(sessionUuid);
             ToolExecutionContext.hydrate(session.environmentVariables());
             try {
-                finalText = aiService.generateWithHistory(history,
-                        "The tool result is already available in the conversation history. Do not call tools again for this turn. Summarize the result for the user and provide any concise next-step guidance.",
-                        resolveProvider(session.provider()));
+                String continuationPrompt = "The tool result is already available in the conversation history."
+                        + " Summarize the result for the user and provide any concise next-step guidance.";
+                final int MAX_RESUME_ITERATIONS = 10;
+                for (int resumeIter = 0; resumeIter < MAX_RESUME_ITERATIONS; resumeIter++) {
+                    String rawResponse = aiService.generateWithHistory(
+                            history, continuationPrompt, resolveProvider(session.provider()));
+                    StructuredAgentResponse structured = extractStructured(rawResponse);
+                    if ("CONTINUE_TURN".equals(structured.status())) {
+                        String progressText = structured.textResponse() != null && !structured.textResponse().isBlank()
+                                ? structured.textResponse() : "";
+                        if (!progressText.isBlank()) {
+                            UiEventFrame progressEvent = new UiEventFrame(
+                                    UUID.randomUUID().toString(), "TEXT_RESPONSE", "CHAT_OUTPUT", progressText, null);
+                            messaging.convertAndSend("/topic/chat/" + sessionUuid, progressEvent);
+                            updated.add(new AiChatMessage(UUID.randomUUID().toString(), "ASSISTANT",
+                                    progressText, System.currentTimeMillis(), null, null, null, null));
+                        }
+                        history.add(new AssistantMessage(progressText.isBlank() ? rawResponse : progressText));
+                        continuationPrompt = "Continue executing the task. Use available tools as needed.";
+                        log.debug("Resume CONTINUE_TURN [session={}, iter={}]", sessionUuid, resumeIter);
+                    } else {
+                        finalText = structured.textResponse() != null && !structured.textResponse().isBlank()
+                                ? structured.textResponse() : rawResponse;
+                        break;
+                    }
+                }
+                if (finalText == null) {
+                    finalText = "Processing required too many steps and was interrupted. Please try again.";
+                }
             } catch (ToolSuspensionException ex) {
                 String simulatedToolCallId = "pending-" + UUID.randomUUID();
                 List<AiChatMessage.ToolCallRef> pendingToolCalls = List.of(
@@ -475,6 +502,33 @@ public class ChatAuthorizationController {
                 ));
             }
 
+            // If the sub-agent (e.g. Computer Administrator) returned FINISHED_TURN but
+            // the session still has a parent on the stack (stackDepth > 1), we must pop
+            // it and let the parent agent (e.g. Concierge) synthesize the final response.
+            // Without this the parent never runs and the session ends prematurely.
+            int resumeStackDepth = session.agentTemplateStack().size();
+            if (resumeStackDepth > 1 && chatService != null) {
+                log.info("Sub-agent FINISHED_TURN at stackDepth={}, delegating to parent agent [session={}]",
+                        resumeStackDepth, sessionUuid);
+                // Do NOT clear ToolExecutionContext here — continueLoopFromSubAgentReturn
+                // needs the session UUID bound so AiOrchestrationService can apply the
+                // parent agent's system prompt and tool-filtering restrictions.
+                //
+                // Remove any leftover 'pending-id' use-once rule before the parent agent
+                // runs. That wildcard is only valid for tool calls made during the
+                // immediate Spring AI resume above; if it was not consumed there it must
+                // not auto-approve tool calls in the parent agent's continuation loop.
+                authorizationRuleEngine.removeUseOnceRule("pending-id");
+                chatService.continueLoopFromSubAgentReturn(
+                        sessionUuid, List.copyOf(updated), finalText, originMode,
+                        resolveProvider(session.provider()));
+                return ResponseEntity.ok(Map.of(
+                        "status", "WEB_RESUMED",
+                        "eventType", "TEXT_RESPONSE",
+                        "eventId", UUID.randomUUID().toString()
+                ));
+            }
+
             UiEventFrame textEvent = new UiEventFrame(
                     UUID.randomUUID().toString(),
                     "TEXT_RESPONSE",
@@ -524,7 +578,49 @@ public class ChatAuthorizationController {
         }
     }
 
-        @GetMapping("/authorize/{sessionUuid}")
+        /**
+     * Strips markdown fences and parses a raw model response as a
+     * {@link StructuredAgentResponse}. Returns a synthetic {@code FINISHED_TURN}
+     * record when the response is not structured JSON.
+     */
+    private StructuredAgentResponse extractStructured(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return new StructuredAgentResponse("FINISHED_TURN", "", null, null);
+        }
+        try {
+            String json = raw.strip();
+            if (json.startsWith("```")) {
+                json = json.replaceAll("(?s)^```[a-zA-Z]*\\n?", "").replaceAll("(?s)```\\s*$", "").strip();
+            }
+            return objectMapper.readValue(json, StructuredAgentResponse.class);
+        } catch (Exception ignored) {
+            return new StructuredAgentResponse("FINISHED_TURN", raw, null, null);
+        }
+    }
+
+    /**
+     * Parses a raw model response, strips any markdown code fence, and returns
+     * only the {@code textResponse} field of a {@link StructuredAgentResponse}.
+     * Falls back to the raw text when the response is not structured JSON.
+     */
+    private String extractTextResponse(String raw) {
+        if (raw == null || raw.isBlank()) return "";
+        try {
+            String json = raw.strip();
+            if (json.startsWith("```")) {
+                json = json.replaceAll("(?s)^```[a-zA-Z]*\\n?", "").replaceAll("(?s)```\\s*$", "").strip();
+            }
+            StructuredAgentResponse structured = objectMapper.readValue(json, StructuredAgentResponse.class);
+            if (structured.textResponse() != null && !structured.textResponse().isBlank()) {
+                return structured.textResponse();
+            }
+        } catch (Exception ignored) {
+            // Not a structured response — return raw text as-is
+        }
+        return raw;
+    }
+
+    @GetMapping("/authorize/{sessionUuid}")
         public ResponseEntity<Map<String, Object>> authorizeViaLink(@PathVariable String sessionUuid,
                                      @RequestParam(name = "approved", defaultValue = "false") boolean approved,
                                      @RequestParam(name = "policy", required = false) String policy,

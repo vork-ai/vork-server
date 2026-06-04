@@ -20,6 +20,7 @@ import sh.vork.ai.agent.AgentTemplate;
 import sh.vork.ai.config.AiConfig;
 import sh.vork.ai.context.ToolExecutionContext;
 import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.AiProvider;
 import sh.vork.ai.memory.SessionEnvironmentService;
 
@@ -51,6 +52,26 @@ public class AiOrchestrationService {
         private static final String BACKGROUND_OPERATIONAL_PROTOCOL = """
 BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated background thread. You must perform all necessary analysis and tool calls across multiple message rounds without expecting further human input. Once you have validated that the requested objective is entirely satisfied (e.g., your types compile successfully and records are saved), you MUST invoke the completeBackgroundTask tool to cleanly finalize the run. Do not exit without invoking this tool.
                         """.stripIndent();
+
+        private static final String STRUCTURED_RESPONSE_MANDATE = """
+
+            ### CORE OUTPUT REQUIREMENT
+            You MUST return your output as a single valid JSON object matching the StructuredAgentResponse schema.
+            No markdown fences, no explanation outside the JSON. Your entire response must be parsable JSON:
+            {
+              "status": "FINISHED_TURN | DELEGATE_TURN | CONTINUE_TURN",
+              "textResponse": "<your human-readable message to the user or supervisor>",
+              "targetAgent": "<exact agent display name, or null>",
+              "delegationInstructions": "<full self-contained task for the sub-agent, or null>"
+            }
+            1. If your goal is completed or you are returning a result to a supervisor, set status to "FINISHED_TURN".
+            2. If you need to delegate a job to a specialized expert agent, set status to "DELEGATE_TURN",
+               populate "targetAgent" with their exact display name, and write explicit, comprehensive
+               task parameters inside "delegationInstructions".
+            3. If you have made meaningful progress and want to inform the user before continuing execution,
+               set status to "CONTINUE_TURN". Your textResponse will be shown to the user immediately and
+               you will be invoked again automatically — do NOT stop and wait for a user reply.
+            """.stripIndent();
 
         private final Map<AiProvider, ChatClient> registry;
         private final SessionEnvironmentService sessionEnvironmentService;
@@ -218,6 +239,11 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                         StringBuilder envBlock = new StringBuilder("\n### ACTIVE SESSION ENVIRONMENT VARIABLES\n");
                         envMap.forEach((k, v) -> envBlock.append(k).append("=").append(v).append("\n"));
                         prompt.append(envBlock);
+                }
+
+                // Mandate structured output for interactive (non-background) sessions
+                if (session == null || session.originMode() != SessionOriginMode.BACKGROUND) {
+                        prompt.append(STRUCTURED_RESPONSE_MANDATE);
                 }
 
                 return prompt.toString();

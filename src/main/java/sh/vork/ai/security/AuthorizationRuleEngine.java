@@ -195,6 +195,18 @@ public class AuthorizationRuleEngine {
         log.debug("Use-once rule added for toolCallId='{}'", toolCallId);
     }
 
+    /**
+     * Removes a use-once exception without consuming it via authorization check.
+     * Use this to drain leftover wildcard tokens (e.g. {@code "pending-id"}) before
+     * handing control to a different agent so they cannot auto-approve unrelated tool calls.
+     */
+    public void removeUseOnceRule(String toolCallId) {
+        boolean removed = useOnceExceptions.remove(toolCallId);
+        if (removed) {
+            log.debug("Use-once rule removed (cleanup) for toolCallId='{}'", toolCallId);
+        }
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     private boolean hasTemporaryUserRule(String username, String toolName) {

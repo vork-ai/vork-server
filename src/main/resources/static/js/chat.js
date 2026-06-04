@@ -305,6 +305,14 @@ function renderMessage(msg) {
     scrollBottom();
 }
 
+function renderAgentTransition(text) {
+    const row = document.createElement('div');
+    row.className = 'agent-transition-row';
+    row.innerHTML = '<i class="fa-solid fa-gears" aria-hidden="true"></i><span>' + escapeHtml(text) + '</span>';
+    messagesArea.insertBefore(row, typingEl);
+    scrollBottom();
+}
+
 function isUiEventFrame(obj) {
     return obj && typeof obj === 'object'
         && typeof obj.type === 'string'
@@ -344,7 +352,11 @@ function createTerminalInlineRow(terminalId, command, options) {
     row.innerHTML =
         '<div class="bubble assistant terminal-stream-bubble">' +
         '  <div class="terminal-stream-header">' +
-        '    <div class="terminal-stream-actions"></div>' +
+        '    <div class="terminal-stream-actions">' +
+        '      <span class="terminal-status-icon terminal-status-running" title="Running" aria-label="Running">' +
+        '        <i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>' +
+        '      </span>' +
+        '    </div>' +
         '    <button type="button" class="terminal-stream-toggle" aria-label="Collapse output" title="Collapse output">' +
         '      <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>' +
         '    </button>' +
@@ -379,6 +391,7 @@ function createTerminalInlineRow(terminalId, command, options) {
         expanded: expanded,
         command: command || 'Live Terminal Stream',
         attachmentUuid: null,
+        statusIcon: row.querySelector('.terminal-status-icon'),
         socketConnected: false,
         finalizeTimer: null
     };
@@ -574,6 +587,12 @@ function markTerminalCompleted(view) {
     if (view.toggleBtn) {
         view.toggleBtn.disabled = false;
     }
+    if (view.statusIcon) {
+        view.statusIcon.className = 'terminal-status-icon terminal-status-done';
+        view.statusIcon.title = 'Completed';
+        view.statusIcon.setAttribute('aria-label', 'Completed');
+        view.statusIcon.innerHTML = '<i class="fa-solid fa-square-check" aria-hidden="true"></i>';
+    }
 }
 
 function collapseCompletedTerminals() {
@@ -739,8 +758,7 @@ function handleTerminalEnd(frame) {
 function renderTerminalTranscript(terminalId, command, output, expanded, attachment) {
     const view = createTerminalInlineRow(terminalId, command, { expanded: expanded });
     view.bufferedText = output || '';
-    view.completed = true;
-    view.live = false;
+    markTerminalCompleted(view);
     view.xtermContainer.classList.add('d-none');
     view.passivePre.textContent = buildPassiveTranscript(view);
     view.passivePre.classList.remove('d-none');
@@ -757,7 +775,12 @@ function attachTerminalHeaderFile(view, attachment) {
         return;
     }
     view.attachmentUuid = attachment.uuid;
-    view.actions.innerHTML = '';
+
+    // Remove any existing attachment link (but leave the status icon intact)
+    const existing = view.actions.querySelector('.terminal-stream-attachment-btn');
+    if (existing) {
+        existing.remove();
+    }
 
     const link = document.createElement('a');
     link.className = 'terminal-stream-attachment-btn';
@@ -1128,6 +1151,10 @@ function handleIncomingUiFrame(frame) {
             renderMessage({ role: 'ASSISTANT', content: '' });
             return;
 
+        case 'AGENT_TRANSITION':
+            renderAgentTransition(frame.textResponse || '');
+            return;
+
         case 'ERROR':
             setAwaitingPostTerminalResponse(false);
             renderMessage({
@@ -1173,6 +1200,11 @@ async function renderSessionRecord(msg, index, messages, lastPromptIndex) {
 
     if (msg.role === 'TOOL') {
         await renderTerminalSessionRecord(msg, index, messages);
+        return;
+    }
+
+    if (msg.role === 'AGENT_TRANSITION') {
+        renderAgentTransition(msg.content || '');
         return;
     }
 
@@ -1448,6 +1480,12 @@ function subscribeToCurrentSession() {
         const msg = JSON.parse(frame.body);
         if (isTerminalEventFrame(msg)) {
             handleIncomingUiFrame(msg);
+            return;
+        }
+
+        // Non-terminal TOOL messages (e.g. connectSsh, sshDownloadFile) are internal
+        // plumbing — the result is already used server-side. Never render their raw JSON.
+        if (msg.role === 'TOOL' && !isTerminalToolMessage(msg)) {
             return;
         }
 

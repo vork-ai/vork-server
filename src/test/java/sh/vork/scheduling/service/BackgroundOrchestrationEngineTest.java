@@ -133,13 +133,13 @@ class BackgroundOrchestrationEngineTest {
                         Mode mode) {
             super(
                     sessionRepo,
+                    null,
                     new AiOrchestrationService(Map.of(), null, null, null, Map.of()),
                     null,
                     new SimpMessagingTemplate(new NoOpMessageChannel()),
                     new ObjectMapper().findAndRegisterModules(),
                     List.<ToolCallback>of(),
-                    (toolName, arguments, sessionUuid, eventId) -> {
-                    },
+                    null,
                     Runnable::run);
             this.sessionRepo = sessionRepo;
             this.context = context;

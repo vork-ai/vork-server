@@ -34,13 +34,34 @@ public class AgentTemplateSeeder {
     private static final AgentTemplate CONCIERGE = new AgentTemplate(
             UUID_CONCIERGE,
             "Concierge",
-            "You are the Vork Concierge, the primary interface for the user. "
-            + "Coordinate schedules, interpret high-level human goals, and delegate "
-            + "deep technical tasks to other agents. You are a helpful and capable assistant, "
-            + "and should but you do not have direct access to tools. ",
+            """
+ You are the Vork Concierge, the primary routing interface for the user. Interpret high-level \
+ human goals and delegate technical tasks to the appropriate specialist agents.
+
+### SYSTEM DISCOVERY PROTOCOL
+1. When a user requests any technical action (e.g., connecting to servers, checking logs, running \
+commands), you MUST NOT assume you cannot do it.
+2. You have access to the `listAgentTemplates` and `listAvailableTools` discovery capabilities.
+3. You MUST immediately invoke `listAgentTemplates` (and `listAvailableTools` if necessary) to inspect \
+what specialist capabilities currently exist in the active session database.
+4. Do not talk to the user or explain what you are doing until you have executed these discovery tool calls.
+
+### DELEGATION LOGIC
+- If your discovery pass reveals an agent template suited for the task (e.g., a "Computer Administrator" \
+for handling SSH/terminal work), you MUST immediately respond with a `DELEGATE_TURN` status, setting \
+`targetAgent` to that agent's exact name, and formatting detailed `delegationInstructions`.
+- If and ONLY if your tool execution results explicitly prove that no suitable agent template is currently \
+registered in the system, you may inform the user of the limitation.
+- When a sub-agent returns with a FINISHED_TURN report via [Agent Report], synthesize the findings and \
+respond to the user with FINISHED_TURN. Only re-delegate if the report explicitly states the task failed \
+and a retry with different instructions would help.
+
+### CONSTRAINTS
+- You are the root of the stack.
+- NEVER attempt to run shell commands yourself. You have no shell access.
+- Maintain a professional, efficient tone.
+            """,
             List.of(
-                    "delegateToAgent",
-                    "scheduleJob",
                     "listAgentTemplates",
                     "listAvailableTools"
             )
@@ -72,9 +93,10 @@ public class AgentTemplateSeeder {
             `connectSsh` and parameters are missing, the system will automatically freeze your \
             execution and prompt the user via a secure schema form. Once they provide it, you will \
             be re-invoked to proceed seamlessly.
-            - Use the SSH connection to discover the target system's environment, capabilities, and 
-            filesystem as needed to. Never ask the user what operating system or software is installed; \
-            infer it from the environment.
+            - Before running any task-specific commands on a host, always perform a brief environment \
+            discovery pass: determine the OS, relevant installed tooling, and any pertinent paths or \
+            service state. Use these findings to select appropriate commands. Never assume the OS, \
+            distribution, or available utilities — infer everything from the environment.
 
             ### TERMINAL EXECUTION PROTOCOLS:
             - Use `executeTerminalCommand` to run shell operations. Ensure you target the correct \
@@ -83,7 +105,15 @@ public class AgentTemplateSeeder {
             orchestrator and remote targets.
             - When your technical objective is entirely met and connections are cleanly severed, \
             compile a brief summary of the completed work or output the result as defined in the \
-            request and immediately invoke `completeAgentTask` to hand control back to the supervisor.
+            request and immediately set your response status to FINISHED_TURN to hand control back to the supervisor.
+
+            ### DELEGATION CONSTRAINTS
+            You are a leaf agent with no sub-agents. You MUST NEVER use "DELEGATE_TURN" as your \
+            response status — there are no agents below you to delegate to. The valid status \
+            values for your responses are "FINISHED_TURN" and "CONTINUE_TURN". Use "CONTINUE_TURN" \
+            to send a visible progress update to the user while continuing to work on the task \
+            (you will be invoked again automatically). Use "FINISHED_TURN" only when the full task \
+            is complete and you are ready to return control to the supervisor.
             """;
 
     private static final AgentTemplate COMPUTER_ADMIN = new AgentTemplate(
@@ -97,8 +127,7 @@ public class AgentTemplateSeeder {
                     "sshUploadFile",
                     "listSshConnections",
                     "setSshAlias",
-                    "disconnectSsh",
-                    "completeAgentTask"
+                    "disconnectSsh"
             )
     );
 
@@ -113,27 +142,26 @@ public class AgentTemplateSeeder {
     @EventListener(ApplicationReadyEvent.class)
     public void onReady() {
         log.debug("ENTER AgentTemplateSeeder.onReady: seeding built-in agent templates");
-        int created = 0;
 
-        created += seedIfAbsent(CONCIERGE);
-        created += seedIfAbsent(COMPUTER_ADMIN);
+        seedOrUpdate(CONCIERGE);
+        seedOrUpdate(COMPUTER_ADMIN);
 
-        log.info("EXIT AgentTemplateSeeder.onReady: built-in agent template seed complete [created={}]", created);
+        log.info("EXIT AgentTemplateSeeder.onReady: built-in agent template seed complete");
     }
 
     // -------------------------------------------------------------------------
     // Helpers
     // -------------------------------------------------------------------------
 
-    private int seedIfAbsent(AgentTemplate template) {
-        if (agentTemplateRepository.get(template.uuid()) != null) {
-            log.debug("Step skip: agent template already exists [uuid={}, name={}]",
-                    template.uuid(), template.name());
-            return 0;
-        }
+    private void seedOrUpdate(AgentTemplate template) {
+        boolean exists = agentTemplateRepository.get(template.uuid()) != null;
         agentTemplateRepository.save(template);
-        log.info("Step create: seeded agent template [uuid={}, name={}]",
-                template.uuid(), template.name());
-        return 1;
+        if (exists) {
+            log.info("Step update: refreshed built-in agent template [uuid={}, name={}]",
+                    template.uuid(), template.name());
+        } else {
+            log.info("Step create: seeded agent template [uuid={}, name={}]",
+                    template.uuid(), template.name());
+        }
     }
 }

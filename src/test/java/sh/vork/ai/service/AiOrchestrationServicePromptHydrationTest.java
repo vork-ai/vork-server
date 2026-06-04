@@ -16,7 +16,6 @@ import org.springframework.ai.chat.client.ChatClient;
 import com.jadaptive.orm.DatabaseRepository;
 
 import sh.vork.ai.AiProvider;
-import sh.vork.ai.agent.AgentTemplate;
 import sh.vork.ai.config.AiConfig;
 import sh.vork.ai.context.ToolExecutionContext;
 import sh.vork.ai.entity.AiSession;
@@ -32,6 +31,7 @@ class AiOrchestrationServicePromptHydrationTest {
     @Test
     void composeSystemPrompt_whenNoSessionBound_returnsBasePromptOnly() throws Exception {
         SessionEnvironmentService envService = mock(SessionEnvironmentService.class);
+        @SuppressWarnings("unchecked")
         AiOrchestrationService service = new AiOrchestrationService(
                 Map.of(), envService, mock(DatabaseRepository.class), mock(DatabaseRepository.class), Map.of());
 
@@ -48,6 +48,7 @@ class AiOrchestrationServicePromptHydrationTest {
         DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
         when(sessionRepo.get("session-1")).thenReturn(null);
 
+        @SuppressWarnings("unchecked")
         AiOrchestrationService service = new AiOrchestrationService(
                 Map.of(AiProvider.GEMINI, mock(ChatClient.class)), envService,
                 sessionRepo, mock(DatabaseRepository.class), Map.of());
@@ -71,6 +72,7 @@ class AiOrchestrationServicePromptHydrationTest {
         DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
         when(sessionRepo.get("session-2")).thenReturn(null);
 
+        @SuppressWarnings("unchecked")
         AiOrchestrationService service = new AiOrchestrationService(
                 Map.of(AiProvider.GEMINI, mock(ChatClient.class)), envService,
                 sessionRepo, mock(DatabaseRepository.class), Map.of());

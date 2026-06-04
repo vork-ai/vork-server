@@ -37,6 +37,7 @@ class ChatServiceSessionBindingTest {
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
         ChatService chatService = new ChatService(
                 sessionRepo,
+                null,
                 mock(AiOrchestrationService.class),
                 mock(FileStorageService.class),
                 mock(SimpMessagingTemplate.class),
@@ -76,6 +77,7 @@ class ChatServiceSessionBindingTest {
 
         ChatService chatService = new ChatService(
                 sessionRepo,
+                null,
                 mock(AiOrchestrationService.class),
                 mock(FileStorageService.class),
                 mock(SimpMessagingTemplate.class),

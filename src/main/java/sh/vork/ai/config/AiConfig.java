@@ -76,10 +76,6 @@ import sh.vork.ai.function.SshConnectRequest;
 import sh.vork.ai.function.UploadFileRequest;
 import sh.vork.ai.agent.AgentTemplate;
 import sh.vork.ai.registry.ToolRegistry;
-import sh.vork.ai.tool.DelegateToAgentTool;
-import sh.vork.ai.tool.CompleteAgentTaskTool;
-import sh.vork.ai.function.DelegateToAgentRequest;
-import sh.vork.ai.function.CompleteAgentTaskRequest;
 import sh.vork.ai.function.ListAgentTemplatesRequest;
 import sh.vork.ai.function.ListAvailableToolsRequest;
 import java.util.LinkedHashMap;
@@ -276,45 +272,6 @@ public class AiConfig {
         return map;
     }
 
-    // -------------------------------------------------------------------------
-    // System tools: agent stack navigation
-    // -------------------------------------------------------------------------
-
-    /**
-     * {@code delegateToAgent} tool — pushes a sub-agent template onto the session stack.
-     */
-    @Bean
-    @ToolCategory("Agent Orchestration")
-    public ToolCallback delegateToAgent(DelegateToAgentTool tool) {
-        return FunctionToolCallback
-                .builder("delegateToAgent", tool::execute)
-                .description("""
-                    Activate a specialized sub-agent persona for the current session by pushing its \
-                    AgentTemplate UUID onto the session's agent stack. The sub-agent's system prompt \
-                    and allowed tools will take effect for all subsequent turns until completeAgentTask \
-                    is invoked. Use this when a task requires a specialized expertise persona."""
-                        .stripIndent())
-                .inputType(DelegateToAgentRequest.class)
-                .build();
-    }
-
-    /**
-     * {@code completeAgentTask} tool — pops the active sub-agent and reverts to the previous persona.
-     */
-    @Bean
-    @ToolCategory("Agent Orchestration")
-    public ToolCallback completeAgentTask(CompleteAgentTaskTool tool) {
-        return FunctionToolCallback
-                .builder("completeAgentTask", tool::execute)
-                .description("""
-                    Signal that the active sub-agent has fully completed its task. Pops the current \
-                    agent template from the session stack, reverting to the previous persona. \
-                    The root concierge persona is never removed even if called redundantly."""
-                        .stripIndent())
-                .inputType(CompleteAgentTaskRequest.class)
-                .build();
-    }
-
     /**
      * {@code listAgentTemplates} tool — returns all configured {@link AgentTemplate} records.
      */
@@ -339,8 +296,7 @@ public class AiConfig {
                 })
                 .description("""
                     List all configured agent templates. Returns each template's UUID, name, \
-                    system prompt, and the list of allowed tool bean IDs. Use the UUID with \
-                    delegateToAgent to activate a persona."""
+                    system prompt, and the list of allowed tool bean IDs."""
                         .stripIndent())
                 .inputType(ListAgentTemplatesRequest.class)
                 .build();

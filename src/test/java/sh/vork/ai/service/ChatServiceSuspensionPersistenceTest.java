@@ -79,6 +79,7 @@ class ChatServiceSuspensionPersistenceTest {
 
         ChatService chatService = new ChatService(
             sessionRepo,
+            null,
             aiService,
             fileStorageService,
             messaging,

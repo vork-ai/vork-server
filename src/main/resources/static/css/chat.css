@@ -295,6 +295,24 @@ body.sidebar-collapsed .sidebar-top {
     background: linear-gradient(180deg, rgba(13, 110, 253, 0.08), rgba(13, 110, 253, 0.02));
 }
 
+/* ── Agent transition indicator ─────────────────────────────────────────── */
+
+.agent-transition-row {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    padding: 0.15rem 0 0.15rem;
+    color: var(--bs-secondary-color);
+    font-size: 0.76rem;
+    opacity: 0.75;
+    user-select: none;
+}
+
+.agent-transition-row .fa-gears {
+    font-size: 0.72rem;
+}
+
 .prompt-title {
     font-weight: 600;
     margin-bottom: 0.3rem;
@@ -425,6 +443,30 @@ body.sidebar-collapsed .sidebar-top {
     align-items: center;
     gap: 0.35rem;
     margin-right: auto;
+}
+
+.terminal-status-icon {
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: 999px;
+    border: 1px solid var(--bs-border-color);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.85rem;
+    background: rgba(255, 255, 255, 0.03);
+    flex-shrink: 0;
+}
+
+.terminal-status-running {
+    color: var(--bs-secondary-color);
+    border-color: var(--bs-border-color);
+}
+
+.terminal-status-done {
+    color: #22c55e;
+    border-color: rgba(34, 197, 94, 0.4);
+    background: rgba(34, 197, 94, 0.07);
 }
 
 .terminal-stream-attachment-btn {

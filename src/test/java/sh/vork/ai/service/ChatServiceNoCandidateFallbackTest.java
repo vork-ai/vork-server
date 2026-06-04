@@ -41,13 +41,13 @@ class ChatServiceNoCandidateFallbackTest {
 
         ChatService chatService = new ChatService(
                 sessionRepo,
+                null,
                 aiService,
                 null,
                 null,
                 new ObjectMapper().findAndRegisterModules(),
                 List.of(),
-                (toolName, arguments, sid, eventId) -> {
-                },
+                null,
                 Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "schedule a task", null, AiProvider.GEMINI);
@@ -84,13 +84,13 @@ class ChatServiceNoCandidateFallbackTest {
 
         ChatService chatService = new ChatService(
             sessionRepo,
+            null,
             aiService,
             null,
             null,
             new ObjectMapper().findAndRegisterModules(),
             List.of(),
-            (toolName, arguments, sid, eventId) -> {
-            },
+            null,
             Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "schedule a task", null, AiProvider.GEMINI);
@@ -129,13 +129,13 @@ class ChatServiceNoCandidateFallbackTest {
 
         ChatService chatService = new ChatService(
                 sessionRepo,
+                null,
                 aiService,
                 null,
                 null,
                 new ObjectMapper().findAndRegisterModules(),
                 List.of(),
-                (toolName, arguments, sid, eventId) -> {
-                },
+                null,
                 Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "finish the task", null, AiProvider.BACKGROUND_SCHEDULER);
@@ -171,13 +171,13 @@ class ChatServiceNoCandidateFallbackTest {
 
         ChatService chatService = new ChatService(
             sessionRepo,
+            null,
             aiService,
             null,
             null,
             new ObjectMapper().findAndRegisterModules(),
             List.of(),
-            (toolName, arguments, sid, eventId) -> {
-            },
+            null,
             Runnable::run);
 
         AiChatMessage out = chatService.sendMessage(sessionId, "summarize that output", null, AiProvider.GEMINI);

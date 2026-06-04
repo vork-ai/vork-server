@@ -516,7 +516,7 @@ public class VirtualSshService extends AbstractSshServer {
 						new FormAction("DENIED", "Cancel", "danger")
 				));
 
-		return new ToolSuspensionException("executeTerminalCommand", "{}", description, formSchema);
+		return new ToolSuspensionException("connectSsh", "{}", description, formSchema);
 	}
 
 	private VorkNode resolveNode(VorkUser principal, String host, int port, String username) throws IOException, SshException {
@@ -628,7 +628,7 @@ public class VirtualSshService extends AbstractSshServer {
 						new FormAction("DENIED", "Cancel", "danger")));
 
 		return new ToolSuspensionException(
-				"executeTerminalCommand",
+				"connectSsh",
 				"",
 				"An SSH username is required before credentials can be resolved.",
 				formSchema);
@@ -670,7 +670,7 @@ public class VirtualSshService extends AbstractSshServer {
 		);
 
 		return new ToolSuspensionException(
-				"executeTerminalCommand",
+				"connectSsh",
 				"",
 				placeholder,
 				schema);
