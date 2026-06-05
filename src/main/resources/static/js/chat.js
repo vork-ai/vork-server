@@ -1158,6 +1158,7 @@ function handleIncomingUiFrame(frame) {
 
         case 'AGENT_SWITCH':
             // Active agent was changed server-side — update the dropdown
+            // Visual notification is handled by the accompanying AGENT_TRANSITION event
             if (agentSel && frame.textResponse) {
                 agentSel.value = frame.textResponse;
             }

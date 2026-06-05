@@ -20,11 +20,20 @@ import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
  *       {@code AGENT_TRANSITION} event, and starts a new generation pass using
  *       {@code delegationInstructions} as the prompt.  The agent stays active
  *       until the user or the AI explicitly switches again.</li>
+ *   <li>{@code "SWITCH_AGENT"} — the agent wants to change the session's active
+ *       agent without immediately starting a new generation pass.  Use this when
+ *       the user explicitly asks to switch agents (e.g., "go back to Concierge").
+ *       The orchestrator resolves {@code targetAgent} by name, saves the new
+ *       {@code activeAgentTemplateId}, broadcasts an {@code AGENT_TRANSITION}
+ *       notification and an {@code AGENT_SWITCH} event to update the UI, then
+ *       returns the agent's {@code textResponse} as the final reply for the
+ *       current turn.  Leaf agents should use this instead of
+ *       {@code DELEGATE_TURN}.</li>
  *   <li>{@code "CONTINUE_TURN"} — the agent is making progress.  {@code textResponse}
  *       is broadcast as an interim update and the loop continues.</li>
  * </ul>
  *
- * @param status                 {@code "FINISHED_TURN"}, {@code "DELEGATE_TURN"}, or {@code "CONTINUE_TURN"}
+ * @param status                 {@code "FINISHED_TURN"}, {@code "DELEGATE_TURN"}, {@code "SWITCH_AGENT"}, or {@code "CONTINUE_TURN"}
  * @param textResponse           human-readable progress or result message; surfaced
  *                               to the user on agent switch and returned as the final
  *                               reply when the agent finishes

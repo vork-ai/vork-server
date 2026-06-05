@@ -59,7 +59,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
             You MUST return your output as a single valid JSON object matching the StructuredAgentResponse schema.
             No markdown fences, no explanation outside the JSON. Your entire response must be parsable JSON:
             {
-              "status": "FINISHED_TURN | DELEGATE_TURN | CONTINUE_TURN",
+              "status": "FINISHED_TURN | DELEGATE_TURN | CONTINUE_TURN | SWITCH_AGENT",
               "textResponse": "<your human-readable message to the user or supervisor>",
               "targetAgent": "<exact agent display name, or null>",
               "delegationInstructions": "<full self-contained task for the sub-agent, or null>"
@@ -71,6 +71,10 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
             3. If you have made meaningful progress and want to inform the user before continuing execution,
                set status to "CONTINUE_TURN". Your textResponse will be shown to the user immediately and
                you will be invoked again automatically — do NOT stop and wait for a user reply.
+            4. If the user explicitly asks to switch to a different agent, set status to "SWITCH_AGENT",
+               set "targetAgent" to the exact display name of the desired agent, and write a brief
+               confirmation message in "textResponse". The session active agent will be updated and the
+               user will see a confirmation — you do NOT need to do any work for the new agent.
             """.stripIndent();
 
         private final Map<AiProvider, ChatClient> registry;

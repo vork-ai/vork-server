@@ -588,7 +588,11 @@ public class ChatService {
                             sessionUuid, structured.targetAgent(), targetId);
 
                     broadcastAndAccumulateTransition(sessionUuid,
-                            "Switched to " + structured.targetAgent(), transitionMsgs);
+                            "Changed to " + structured.targetAgent(), transitionMsgs);
+                    // Notify the frontend to update the agent dropdown
+                    messaging.convertAndSend("/topic/chat/" + sessionUuid,
+                            new UiEventFrame(UUID.randomUUID().toString(),
+                                    "AGENT_SWITCH", "AGENT_SWITCH", targetId, null));
 
                     history.add(new AssistantMessage(
                             structured.textResponse() != null ? structured.textResponse() : rawResponse));
@@ -601,7 +605,32 @@ public class ChatService {
                         structured.targetAgent(), sessionUuid);
             }
 
-            // FINISHED_TURN (or unresolvable DELEGATE_TURN falls through here) — always terminal
+            if ("SWITCH_AGENT".equals(structured.status())) {
+                String targetId = resolveAgentByName(structured.targetAgent(), sessionUuid);
+                if (targetId != null) {
+                    AiSession current = sessionRepo.get(sessionUuid);
+                    if (current == null) {
+                        current = currentSession;
+                    }
+                    sessionRepo.save(new AiSession(current.uuid(), current.provider(), current.originMode(),
+                            current.username(), current.name(), current.createdAt(), current.currentRoundCount(),
+                            current.messages(), current.environmentVariables(), current.status(), targetId));
+                    String agentDisplayName = resolveAgentNameById(targetId);
+                    broadcastAndAccumulateTransition(sessionUuid,
+                            "Changed to " + agentDisplayName, transitionMsgs);
+                    messaging.convertAndSend("/topic/chat/" + sessionUuid,
+                            new UiEventFrame(UUID.randomUUID().toString(),
+                                    "AGENT_SWITCH", "AGENT_SWITCH", targetId, null));
+                    log.info("SWITCH_AGENT: active agent changed [session={}, target={}, newAgentId={}]",
+                            sessionUuid, structured.targetAgent(), targetId);
+                } else {
+                    log.warn("SWITCH_AGENT: target agent not found, treating as FINISHED_TURN [target={}, session={}]",
+                            structured.targetAgent(), sessionUuid);
+                }
+                // Fall through to FINISHED_TURN — the AI's textResponse is returned to the user
+            }
+
+            // FINISHED_TURN (or unresolvable DELEGATE_TURN / SWITCH_AGENT falls through here) — always terminal
             String finalText = structured.textResponse() != null && !structured.textResponse().isBlank()
                     ? structured.textResponse()
                     : rawResponse;

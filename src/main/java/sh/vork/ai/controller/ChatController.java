@@ -1,13 +1,10 @@
 package sh.vork.ai.controller;
 
-import sh.vork.ai.AiProvider;
-import sh.vork.ai.agent.AgentTemplate;
-import sh.vork.ai.entity.AiChatMessage;
-import sh.vork.ai.entity.AiSession;
-import sh.vork.ai.protocol.UiEventFrame;
-import sh.vork.ai.service.AiOrchestrationService;
-import sh.vork.ai.service.ChatService;
-import jakarta.servlet.http.HttpSession;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.UUID;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
@@ -22,10 +19,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
-import java.util.List;
-import java.util.Map;
-import java.util.UUID;
-import java.util.Comparator;
+import jakarta.servlet.http.HttpSession;
+import sh.vork.ai.AiProvider;
+import sh.vork.ai.entity.AiChatMessage;
+import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.protocol.UiEventFrame;
+import sh.vork.ai.service.AiOrchestrationService;
+import sh.vork.ai.service.ChatService;
 
 /**
  * Handles both HTTP session initialisation and WebSocket chat messages.
@@ -119,7 +119,7 @@ public class ChatController {
                     .body(Map.of("status", "ERROR", "message", "agentTemplateId required"));
         }
         try {
-            AiSession session = chatService.getSessionForCurrentUser(sessionUuid);
+            ///AiSession session = chatService.getSessionForCurrentUser(sessionUuid);
             String newId = chatService.switchActiveAgentById(sessionUuid, agentTemplateId);
             if (newId == null) {
                 return ResponseEntity.status(404)

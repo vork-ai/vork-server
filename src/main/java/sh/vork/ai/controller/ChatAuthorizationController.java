@@ -408,10 +408,10 @@ public class ChatAuthorizationController {
                         if (targetId != null) {
                             UiEventFrame transitionEvent = new UiEventFrame(UUID.randomUUID().toString(),
                                     "AGENT_TRANSITION", "AGENT_TRANSITION",
-                                    "Switched to " + structured.targetAgent(), null);
+                                    "Changed to " + structured.targetAgent(), null);
                             messaging.convertAndSend("/topic/chat/" + sessionUuid, transitionEvent);
                             updated.add(new AiChatMessage(UUID.randomUUID().toString(), "AGENT_TRANSITION",
-                                    "Switched to " + structured.targetAgent(),
+                                    "Changed to " + structured.targetAgent(),
                                     System.currentTimeMillis(), null, null, null, null));
                             String handoffText = structured.textResponse() != null && !structured.textResponse().isBlank()
                                     ? structured.textResponse() : rawResponse;
@@ -424,6 +424,27 @@ public class ChatAuthorizationController {
                         }
                         log.warn("Resume DELEGATE_TURN: agent not found, treating as FINISHED_TURN [target={}, session={}]",
                                 structured.targetAgent(), sessionUuid);
+                        finalText = structured.textResponse() != null && !structured.textResponse().isBlank()
+                                ? structured.textResponse() : rawResponse;
+                        break;
+                    } else if ("SWITCH_AGENT".equals(structured.status()) && chatService != null) {
+                        String targetId = chatService.switchActiveAgentByName(sessionUuid, structured.targetAgent());
+                        if (targetId != null) {
+                            String agentDisplayName = structured.targetAgent() != null
+                                    ? structured.targetAgent() : "Unknown Agent";
+                            UiEventFrame transitionEvent = new UiEventFrame(UUID.randomUUID().toString(),
+                                    "AGENT_TRANSITION", "AGENT_TRANSITION",
+                                    "Changed to " + agentDisplayName, null);
+                            messaging.convertAndSend("/topic/chat/" + sessionUuid, transitionEvent);
+                            updated.add(new AiChatMessage(UUID.randomUUID().toString(), "AGENT_TRANSITION",
+                                    "Changed to " + agentDisplayName,
+                                    System.currentTimeMillis(), null, null, null, null));
+                            log.info("Resume SWITCH_AGENT: agent switched [session={}, target={}]",
+                                    sessionUuid, structured.targetAgent());
+                        } else {
+                            log.warn("Resume SWITCH_AGENT: agent not found [target={}, session={}]",
+                                    structured.targetAgent(), sessionUuid);
+                        }
                         finalText = structured.textResponse() != null && !structured.textResponse().isBlank()
                                 ? structured.textResponse() : rawResponse;
                         break;

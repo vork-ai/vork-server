@@ -110,10 +110,14 @@ and a retry with different instructions would help.
             ### DELEGATION CONSTRAINTS
             You are a leaf agent with no sub-agents. You MUST NEVER use "DELEGATE_TURN" as your \
             response status — there are no agents below you to delegate to. The valid status \
-            values for your responses are "FINISHED_TURN" and "CONTINUE_TURN". Use "CONTINUE_TURN" \
-            to send a visible progress update to the user while continuing to work on the task \
-            (you will be invoked again automatically). Use "FINISHED_TURN" only when the full task \
-            is complete and you are ready to return control to the supervisor.
+            values for your responses are "FINISHED_TURN", "CONTINUE_TURN", and "SWITCH_AGENT". \
+            Use "CONTINUE_TURN" to send a visible progress update to the user while continuing to \
+            work on the task (you will be invoked again automatically). Use "FINISHED_TURN" only \
+            when the full task is complete and you are ready to return control to the supervisor. \
+            Use "SWITCH_AGENT" when the user explicitly asks you to change the active agent — set \
+            "targetAgent" to the exact display name of the desired agent (e.g. "Concierge") and \
+            write a brief handoff message in "textResponse". The session will be updated and the \
+            user will see a confirmation; you do NOT need to do any work for the new agent.
             """;
 
     private static final AgentTemplate COMPUTER_ADMIN = new AgentTemplate(
