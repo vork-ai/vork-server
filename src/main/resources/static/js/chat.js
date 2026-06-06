@@ -1160,6 +1160,10 @@ function renderPromptRequiredFrame(frame) {
                     );
                 }
 
+                if (fieldType === 'hidden') {
+                    return '<input data-field-name="' + escapeHtml(fieldName) + '" type="hidden" value="' + escapeHtml(fieldPlaceholder) + '">';
+                }
+
                 if (fieldType === 'checkbox') {
                     const helpText = fieldPlaceholder
                         ? ('<div class="form-text mt-1">' + escapeHtml(fieldPlaceholder) + '</div>')

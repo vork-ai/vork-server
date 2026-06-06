@@ -650,12 +650,12 @@ public class VirtualSshService extends AbstractSshServer {
 
 		List<FormField> fields = List.of(
 			new FormField(
-				"HOST_KEY_VERIFICATION", 
-				"CHECKBOX", 
-				description, 
-				"I trust this host key.", 
-				true, 
-				FieldSource.CONTEXT, // CRITICAL: This bypasses the LLM history!,
+				"HOST_KEY_VERIFICATION",
+				"HIDDEN",
+				"",
+				"true",
+				false,
+				FieldSource.CONTEXT, // CRITICAL: This bypasses the LLM history!
 				Collections.emptyList()
 			)
 		);
