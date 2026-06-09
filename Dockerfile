@@ -39,11 +39,16 @@ WORKDIR /app
 
 COPY --from=build /workspace/vork-prototype/target/vork-*.jar app.jar
 
-# conf.d/ is read at startup for database.properties.
-# Mount a volume here or use MONGO_HOST / MONGO_PORT / MONGO_DATABASE env vars
-# to override the connection without a config file.
-RUN mkdir conf.d
+# conf.d/ holds database.properties and the ssl/ sub-directory with PEM certs.
+# Mount a volume or use MONGO_* / VORK_SSL_CERT_DIR env vars to override.
+RUN mkdir -p conf.d/ssl
 
-EXPOSE 8080
+# HTTP (redirect to HTTPS) + HTTPS
+EXPOSE 8080 8443
+
+# Set VORK_SSL_CERT_DIR to override the certificate directory (default: conf.d/ssl).
+# Set SERVER_PORT to override the HTTPS port (default: 8443).
+# Set VORK_SSL_HTTP_PORT to override the HTTP redirect port (default: 8080).
+ENV VORK_SSL_CERT_DIR=""
 
 ENTRYPOINT ["java", "-jar", "app.jar"]

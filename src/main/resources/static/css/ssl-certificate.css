@@ -1,0 +1,41 @@
+/* ssl-certificate.css — SSL Certificate settings page */
+
+.cert-field-label {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--bs-secondary-color);
+    margin-bottom: 0.1rem;
+}
+
+.cert-field-value {
+    font-family: var(--bs-font-monospace);
+    word-break: break-all;
+}
+
+.cert-badge {
+    font-size: 0.72rem;
+}
+
+.le-status-indicator {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    margin-right: 6px;
+}
+
+.le-status-idle     { background: var(--bs-secondary); }
+.le-status-active   { background: var(--bs-warning); animation: pulse 1.2s infinite; }
+.le-status-success  { background: var(--bs-success); }
+.le-status-failed   { background: var(--bs-danger); }
+
+@keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50%       { opacity: 0.3; }
+}
+
+.section-divider {
+    border-color: var(--bs-border-color-translucent);
+    margin: 2rem 0;
+}

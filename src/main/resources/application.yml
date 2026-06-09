@@ -25,6 +25,20 @@ spring:
       name: admin
       password: admin123
 
+# ── SSL / HTTPS ───────────────────────────────────────────────────────────────
+# Vork auto-generates a self-signed certificate on first startup in conf.d/ssl/.
+# Override these defaults via environment variables or system properties:
+#
+#   VORK_SSL_CERT_DIR   (or -Dvork.ssl.cert-dir=...)  — path to PEM cert directory
+#   SERVER_PORT         (or -Dserver.port=...)         — HTTPS port (default 8443)
+#   VORK_SSL_HTTP_PORT  (or -Dvork.ssl.http-port=...)  — HTTP redirect port (default 8080)
+#
+# Explicit defaults (omit to use the built-in defaults above):
+# vork:
+#   ssl:
+#     cert-dir: conf.d/ssl
+#     http-port: 8080
+
 # When adding a second provider, add its block here, e.g.:
 #  openai:
 #    api-key: ${OPENAI_API_KEY:}

@@ -38,6 +38,7 @@ services:
         condition: service_healthy
     ports:
       - "8080:8080"
+      - "8443:8443"
     environment:
       # MongoDB — these env vars override conf.d/database.properties
       MONGO_HOST: mongodb
@@ -47,6 +48,10 @@ services:
       # Gemini API key — required for AI features.
       # Set GEMINI_API_KEY in your environment or in a .env file.
       SPRING_AI_GOOGLE_GENAI_APIKEY: ${GEMINI_API_KEY}
+
+      # SSL certificate directory (default: conf.d/ssl inside the container).
+      # Override with an absolute path to mount external certs.
+      # VORK_SSL_CERT_DIR: /app/conf.d/ssl
     volumes:
       # Optional: mount your local conf.d/ so custom settings are preserved
       # across container rebuilds. Comment out if you prefer env-var-only config.

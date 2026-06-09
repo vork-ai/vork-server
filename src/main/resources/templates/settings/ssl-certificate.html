@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SSL Certificate — Vork</title>
+    <link rel="icon" type="image/png" href="/images/Vork-Faviconx128.png">
+    <link rel="stylesheet" href="/packages/npm/bootstrap/current/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="/css/bootstrap-theme.css">
+    <link rel="stylesheet" href="/packages/npm.fortawesome/fontawesome-free/current/css/all.min.css">
+    <link rel="stylesheet" href="/css/settings.css">
+    <link rel="stylesheet" href="/css/ssl-certificate.css">
+</head>
+<body>
+<div class="container py-5" style="max-width: 760px;">
+    <div th:replace="~{fragments/settings-navigation :: backToSettings}"></div>
+    <h2 class="mb-1"><i class="fa-solid fa-lock me-2"></i>SSL Certificate</h2>
+    <p class="text-muted mb-4">View, regenerate, or replace the HTTPS certificate.</p>
+
+    <div id="alert-area" class="mb-3"></div>
+
+    <!-- ── Not configured ───────────────────────────────────────────────── -->
+    <div id="cert-not-configured" class="alert alert-warning" style="display:none;">
+        <i class="fa-solid fa-triangle-exclamation me-2"></i>
+        No SSL certificate is currently active. The server may be running on HTTP only.
+    </div>
+
+    <!-- ── Current certificate ──────────────────────────────────────────── -->
+    <div id="cert-info-section">
+        <div class="card mb-4 border-primary">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <span><i class="fa-solid fa-certificate text-primary me-2"></i><span class="fw-semibold">Current Certificate</span></span>
+                <span id="cert-type"></span>
+            </div>
+            <div class="card-body">
+                <div class="row row-cols-1 row-cols-sm-2 g-3">
+                    <div class="col">
+                        <div class="cert-field-label">Common Name (CN)</div>
+                        <div class="cert-field-value" id="cert-cn">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Organization (O)</div>
+                        <div class="cert-field-value" id="cert-o">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Organizational Unit (OU)</div>
+                        <div class="cert-field-value" id="cert-ou">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Locality / City (L)</div>
+                        <div class="cert-field-value" id="cert-l">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">State / Province (ST)</div>
+                        <div class="cert-field-value" id="cert-st">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Country (C)</div>
+                        <div class="cert-field-value" id="cert-c">—</div>
+                    </div>
+                    <div class="col col-sm-12">
+                        <div class="cert-field-label">Subject Alternative Names</div>
+                        <div class="cert-field-value" id="cert-sans">—</div>
+                    </div>
+                </div>
+
+                <hr class="section-divider">
+
+                <div class="row row-cols-1 row-cols-sm-2 g-3">
+                    <div class="col">
+                        <div class="cert-field-label">Valid From</div>
+                        <div class="cert-field-value" id="cert-valid-from">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Valid Until</div>
+                        <div class="cert-field-value" id="cert-valid-until">—</div>
+                    </div>
+                    <div class="col col-sm-12">
+                        <div id="cert-expiry-info" class="small text-muted"></div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Signature Algorithm</div>
+                        <div class="cert-field-value" id="cert-algorithm">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Key Size</div>
+                        <div class="cert-field-value" id="cert-keysize">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Serial Number</div>
+                        <div class="cert-field-value small" id="cert-serial">—</div>
+                    </div>
+                    <div class="col">
+                        <div class="cert-field-label">Issuer</div>
+                        <div class="cert-field-value small" id="cert-issuer">—</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Regenerate self-signed ────────────────────────────────────────── -->
+    <div class="card mb-4 border-secondary">
+        <div class="card-header d-flex align-items-center gap-2">
+            <i class="fa-solid fa-rotate text-secondary"></i>
+            <span class="fw-semibold">Regenerate Self-Signed Certificate</span>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Generates a new 2048-bit RSA self-signed certificate. Browsers will show a
+                security warning until you either import it as trusted or switch to Let's Encrypt.
+                The SSL context reloads automatically — no restart required.
+            </p>
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="ss-cn">Common Name (CN) <span class="text-danger">*</span></label>
+                    <input type="text" id="ss-cn" class="form-control" placeholder="e.g. my.server.com" autocomplete="off">
+                    <div class="form-text">The hostname of this server.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="ss-o">Organization (O)</label>
+                    <input type="text" id="ss-o" class="form-control" placeholder="e.g. Acme Corp" autocomplete="off">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="ss-ou">Organizational Unit (OU)</label>
+                    <input type="text" id="ss-ou" class="form-control" placeholder="e.g. IT" autocomplete="off">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="ss-l">Locality / City (L)</label>
+                    <input type="text" id="ss-l" class="form-control" placeholder="e.g. London" autocomplete="off">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="ss-st">State / Province (ST)</label>
+                    <input type="text" id="ss-st" class="form-control" placeholder="e.g. England" autocomplete="off">
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="ss-c">Country (C)</label>
+                    <input type="text" id="ss-c" class="form-control" placeholder="e.g. GB" maxlength="2" autocomplete="off">
+                    <div class="form-text">ISO 3166-1 alpha-2 country code.</div>
+                </div>
+            </div>
+            <div class="d-flex gap-2 flex-wrap">
+                <button id="btn-regen-ss" class="btn btn-warning btn-sm" onclick="regenerateSelfSigned()">
+                    <i class="fa-solid fa-rotate me-1"></i>Regenerate Certificate
+                </button>
+                <button class="btn btn-outline-secondary btn-sm" onclick="downloadCsr()"
+                        title="Download a Certificate Signing Request to get it signed by a CA">
+                    <i class="fa-solid fa-file-arrow-down me-1"></i>Download CSR
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- ── Let's Encrypt ─────────────────────────────────────────────────── -->
+    <div class="card mb-4 border-success">
+        <div class="card-header d-flex align-items-center gap-2">
+            <i class="fa-solid fa-shield-halved text-success"></i>
+            <span class="fw-semibold">Let's Encrypt (ACME)</span>
+        </div>
+        <div class="card-body">
+            <p class="text-muted small mb-3">
+                Automatically obtains and renews a trusted certificate from
+                <strong>Let's Encrypt</strong> using the HTTP-01 challenge.
+            </p>
+            <div class="alert alert-info d-flex gap-2 py-2 small">
+                <i class="fa-solid fa-circle-info mt-1 flex-shrink-0"></i>
+                <span>
+                    Let's Encrypt validates domain ownership by fetching
+                    <code>http://{hostname}:80/.well-known/acme-challenge/…</code>.
+                    Port <strong>80 must be publicly reachable</strong> on the internet and
+                    routed to Vork's HTTP port (default 8080).
+                    Certificates are renewed automatically 30 days before expiry.
+                </span>
+            </div>
+            <div class="row g-3 mb-3">
+                <div class="col-md-6">
+                    <label class="form-label" for="le-hostname">Hostname <span class="text-danger">*</span></label>
+                    <input type="text" id="le-hostname" class="form-control" placeholder="e.g. my.vork.app" autocomplete="off">
+                    <div class="form-text">Must resolve to this server's public IP.</div>
+                </div>
+                <div class="col-md-6">
+                    <label class="form-label" for="le-email">Contact Email <span class="text-danger">*</span></label>
+                    <input type="email" id="le-email" class="form-control" placeholder="admin@example.com" autocomplete="off">
+                    <div class="form-text">Used for expiry notifications from Let's Encrypt.</div>
+                </div>
+            </div>
+            <button id="btn-le-request" class="btn btn-success btn-sm mb-3" onclick="requestLetsEncrypt()">
+                <i class="fa-solid fa-certificate me-1"></i>Request Certificate
+            </button>
+
+            <!-- Status display -->
+            <div id="le-status-display" class="small text-muted">
+                <span class="le-status-indicator le-status-idle"></span>
+                <span>Idle</span>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script src="/packages/npm/bootstrap/current/dist/js/bootstrap.bundle.min.js"></script>
+<script src="/js/ssl-certificate.js"></script>
+</body>
+</html>

@@ -1,12 +1,16 @@
 package sh.vork.ai.slack;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.jadaptive.orm.DatabaseRepository;
+import java.util.List;
+import java.util.Map;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.jadaptive.orm.DatabaseRepository;
 
 import sh.vork.ai.entity.AiChatMessage;
 import sh.vork.ai.entity.AiSession;
@@ -23,10 +27,6 @@ import sh.vork.relay.RelayEncryptionService;
 import sh.vork.relay.RelayHttpClient;
 import sh.vork.relay.RelaySubmission;
 import sh.vork.setup.SystemSettingsService;
-
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
 
 /**
  * Decides how to render a {@link ToolSuspensionException} prompt for a Slack DM user

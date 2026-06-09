@@ -40,8 +40,7 @@ public class SlackChannelRegistrationService {
 
     private final DatabaseRepository<NotificationProviderConfig> configRepo;
     private final DatabaseRepository<GlobalAddress>              globalAddressRepo;
-    private final SlackApiClient                                 slackApiClient;
-
+    
     /** registrationId → pending */
     private final ConcurrentHashMap<String, PendingChannelRegistration> byId   = new ConcurrentHashMap<>();
     /** code → pending */
@@ -53,7 +52,6 @@ public class SlackChannelRegistrationService {
             SlackApiClient slackApiClient) {
         this.configRepo       = configRepo;
         this.globalAddressRepo = globalAddressRepo;
-        this.slackApiClient   = slackApiClient;
     }
 
     // ── Public API ────────────────────────────────────────────────────────────

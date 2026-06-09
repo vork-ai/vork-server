@@ -35,6 +35,8 @@ public class SecurityConfig {
                 .requestMatchers("/ws/**").permitAll()
                 .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                 .requestMatchers("/input-form/**").permitAll()
+                // ACME HTTP-01 challenge — must be publicly accessible on plain HTTP
+                .requestMatchers("/.well-known/acme-challenge/**").permitAll()
                 .anyRequest().authenticated()
             )
             .formLogin(form -> form
@@ -62,7 +64,7 @@ public class SecurityConfig {
                 .ignoringRequestMatchers("/api/authorization/**", "/api/chat/**", "/ws/**", "/logout",
                         "/api/setup/**", "/api/system/**", "/api/ai/**", "/api/agents/**",
                         "/api/notifications/**", "/api/user/**", "/api/types/**",
-                        "/api/transcription/**")
+                        "/api/transcription/**", "/api/ssl/**")
             )
             .sessionManagement(session -> session
                 .sessionConcurrency(concurrency -> concurrency

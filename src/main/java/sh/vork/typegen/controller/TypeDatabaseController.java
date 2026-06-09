@@ -241,7 +241,7 @@ public class TypeDatabaseController {
      *  Probes for {@code getDisplayName()}, {@code getLabel()}, or {@code getDescription()}
      *  to obtain a human-readable label; falls back to {@link Enum#name()}.
      */
-    @SuppressWarnings({"rawtypes", "unchecked"})
+    @SuppressWarnings({"rawtypes"})
     private static List<Map<String, String>> buildEnumOptions(Class<?> enumType) {
         java.lang.reflect.Method displayMethod = null;
         for (String methodName : new String[]{"getDisplayName", "getLabel", "getDescription"}) {
