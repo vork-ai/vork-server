@@ -2,11 +2,10 @@
 # Vork — Docker Compose
 #
 # Usage:
-#   export GEMINI_API_KEY=your-key-here
 #   docker compose up --build
 #
-# Or create a .env file in this directory:
-#   GEMINI_API_KEY=your-key-here
+# AI provider keys can be configured through the Settings UI after first login,
+# or supplied as environment variables (see the vork service below).
 # =============================================================================
 
 services:
@@ -45,9 +44,12 @@ services:
       MONGO_PORT: 27017
       MONGO_DATABASE: vork
 
-      # Gemini API key — required for AI features.
-      # Set GEMINI_API_KEY in your environment or in a .env file.
-      SPRING_AI_GOOGLE_GENAI_APIKEY: ${GEMINI_API_KEY}
+      # AI provider API keys — set whichever provider(s) you want to use.
+      # These can also be configured through the Settings UI after first login.
+      # SPRING_AI_GOOGLE_GENAI_APIKEY: your-gemini-key
+      # SPRING_AI_OPENAI_API_KEY: your-openai-key
+      # SPRING_AI_GROQ_API_KEY: your-groq-key
+      # SPRING_AI_OLLAMA_BASE_URL: http://host.docker.internal:11434
 
       # SSL certificate directory (default: conf.d/ssl inside the container).
       # Override with an absolute path to mount external certs.
