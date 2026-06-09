@@ -71,7 +71,9 @@ Even if an attacker gains full control of the relay server, its database, and it
 
 ### The public relay
 
-A hosted relay instance runs at `relay.vork.sh` and is the default out of the box. No registration, no configuration — it Just Vork&trade;. You can self-host the relay if you prefer; the source is at [github.com/ludup/vork-relay](https://github.com/ludup/vork-relay) and it's a single Spring Boot jar.
+A hosted relay instance runs at `relay.vork.sh` and is the default out of the box. No registration, no configuration. It's designed to Just Vork&trade;. You can self-host the relay if you prefer; the source is at [github.com/ludup/vork-relay](https://github.com/ludup/vork-relay) and it's a single Spring Boot jar.
+
+My company **[Jadpative](https://jadaptive.com)** hosts and pays for the relay service. 
 
 ---
 
