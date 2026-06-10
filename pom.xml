@@ -47,7 +47,7 @@
             </exclusions>
         </dependency>
 
-        <!-- Spring AI — Google Generative AI (Gemini API via Google AI Studio) -->
+        <!-- Spring AI — Google Generative AI (Gemini via Google AI Studio API key) -->
         <dependency>
             <groupId>org.springframework.ai</groupId>
             <artifactId>spring-ai-starter-model-google-genai</artifactId>
@@ -180,11 +180,6 @@
 
         <!-- NPM packages (served locally via NpmPackageController) -->
         <dependency>
-            <groupId>npm</groupId>
-            <artifactId>bootstrap</artifactId>
-            <version>5.3.3</version>
-        </dependency>
-        <dependency>
             <groupId>npm.fortawesome</groupId>
             <artifactId>fontawesome-free</artifactId>
             <version>6.5.2</version>
@@ -264,6 +259,39 @@
                         <arg>-parameters</arg>
                     </compilerArgs>
                 </configuration>
+            </plugin>
+            <!-- Tailwind CSS: install Node, run npm install, then compile CSS -->
+            <plugin>
+                <groupId>com.github.eirslett</groupId>
+                <artifactId>frontend-maven-plugin</artifactId>
+                <version>1.15.1</version>
+                <configuration>
+                    <nodeVersion>v22.13.1</nodeVersion>
+                    <installDirectory>${project.basedir}/.node</installDirectory>
+                </configuration>
+                <executions>
+                    <execution>
+                        <id>install-node-npm</id>
+                        <goals><goal>install-node-and-npm</goal></goals>
+                        <phase>initialize</phase>
+                    </execution>
+                    <execution>
+                        <id>npm-install</id>
+                        <goals><goal>npm</goal></goals>
+                        <phase>initialize</phase>
+                        <configuration>
+                            <arguments>install</arguments>
+                        </configuration>
+                    </execution>
+                    <execution>
+                        <id>build-tailwind-css</id>
+                        <goals><goal>npm</goal></goals>
+                        <phase>generate-resources</phase>
+                        <configuration>
+                            <arguments>run build-css</arguments>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
             <plugin>
                 <groupId>org.springframework.boot</groupId>

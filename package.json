@@ -1,0 +1,11 @@
+{
+  "name": "vork-ui",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build-css": "tailwindcss -i tailwind-input.css -o src/main/resources/static/css/tailwind.css --minify"
+  },
+  "devDependencies": {
+    "tailwindcss": "3.4.17"
+  }
+}

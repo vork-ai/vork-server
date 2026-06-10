@@ -1,4 +1,7 @@
 /target/
+/node_modules/
+/.node/
+/config/
 /ssh_host_ecdsa_256
 /ssh_host_ecdsa_256.pub
 /ssh_host_ecdsa_384
@@ -18,3 +21,4 @@
 /ARTICLE.md
 /JOURNAL.md
 /PROGRESS.md
+/.github/
