@@ -237,7 +237,9 @@ public class SkillService {
         }
 
         if (!skill.outputTemplate().isBlank()) {
-            sb.append("Output Template (your response MUST conform to this):\n")
+            sb.append("### REQUIRED OUTPUT FORMAT\n")
+              .append("The 'output' argument you pass to completeSkillExecution MUST conform "
+                      + "exactly to this template — same structure, same fields, no deviations:\n")
               .append(skill.outputTemplate()).append("\n\n");
         }
 

@@ -234,10 +234,15 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
         }
 
         private static final String SKILL_OPERATIONAL_PROTOCOL =
-                "SKILL EXECUTION PROTOCOL: You are executing a sandboxed skill. Process the input "
-                + "provided and produce the requested output. Once the objective is fully "
-                + "satisfied, invoke completeSkillExecution with your output and success status. "
-                + "Do not exit without invoking this tool.";
+                "SKILL EXECUTION PROTOCOL: You are executing a sandboxed skill.\n"
+                + "MANDATORY RULES:\n"
+                + "1. You MUST complete this skill by calling the completeSkillExecution tool. "
+                +    "Responding with plain text alone does NOT complete the skill — the tool call is required.\n"
+                + "2. If the user message contains a REQUIRED OUTPUT FORMAT section, the 'output' argument "
+                +    "you pass to completeSkillExecution MUST follow that template exactly — same structure, "
+                +    "same fields, no omissions and no additions.\n"
+                + "3. Do not end a turn without either using an available tool or calling completeSkillExecution. "
+                +    "Use your tools to gather whatever information you need, then call completeSkillExecution.";
 
         private String composeSystemPrompt() {
                 String sessionUuid = ToolExecutionContext.getSessionUuid();

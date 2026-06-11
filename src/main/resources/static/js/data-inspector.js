@@ -20,7 +20,7 @@
     var modalSaveBtn    = document.getElementById('modal-save-btn');
     var modalError      = document.getElementById('modal-error');
 
-    var bsModal = new bootstrap.Modal(modalEl);
+    var bsModal = new VorkModal(modalEl);
 
     // ── State ─────────────────────────────────────────────────────────────────
 
