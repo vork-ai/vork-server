@@ -226,6 +226,50 @@ class ChatServiceNoCandidateFallbackTest {
         assertEquals("Completed scan and sent consolidated report to the user.", saved.messages().get(saved.messages().size() - 1).content());
     }
 
+    @Test
+    void sendMessage_whenPersistUserMessageFalse_doesNotStoreInvocationUserMessage() {
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+        RecordingHistoryAiService aiService = new RecordingHistoryAiService();
+
+        String sessionId = "session-non-persisted-user-invocation";
+        sessionRepo.save(new AiSession(
+                sessionId,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "anonymous",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(),
+                AiSession.defaultEnvironmentVariables(),
+                AiSessionStatus.RUNNING, null, null, null, null, null));
+
+        ChatService chatService = new ChatService(
+                sessionRepo,
+                null,
+                aiService,
+                null,
+                null,
+                new ObjectMapper().findAndRegisterModules(),
+                List.of(),
+                null,
+                Runnable::run);
+
+        AiChatMessage out = chatService.sendMessage(
+                sessionId,
+                "Proceed.",
+                List.of(),
+                AiProvider.BACKGROUND_SCHEDULER,
+                false);
+
+        assertNotNull(out);
+        AiSession saved = sessionRepo.get(sessionId);
+        assertNotNull(saved);
+        assertEquals(1, saved.messages().size());
+        assertEquals("ASSISTANT", saved.messages().get(0).role());
+        assertEquals("history-recorded", saved.messages().get(0).content());
+    }
+
         @Test
         void sendMessage_excludesToolMessagesFromParentConversationHistory() {
         MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);

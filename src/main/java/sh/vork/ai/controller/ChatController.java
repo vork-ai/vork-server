@@ -20,6 +20,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import jakarta.servlet.http.HttpServletRequest;
 
 import jakarta.servlet.http.HttpSession;
 import sh.vork.ai.AiProvider;
@@ -33,8 +34,10 @@ import sh.vork.ai.registry.ToolRegistry;
 import sh.vork.ai.service.AiOrchestrationService;
 import sh.vork.ai.service.ChatService;
 import sh.vork.ai.terminal.TerminalStreamRouter;
+import sh.vork.ai.memory.SessionEnvironmentService;
 import sh.vork.orm.DatabaseRepository;
 import sh.vork.skill.Skill;
+import sh.vork.web.RequestOriginContext;
 
 /**
  * Handles both HTTP session initialisation and WebSocket chat messages.
@@ -60,6 +63,7 @@ public class ChatController {
     private final AiModelService         modelService;
     private final ToolRegistry           toolRegistry;
     private final DatabaseRepository<Skill> skillRepo;
+    private final SessionEnvironmentService sessionEnvironmentService;
 
 
 
@@ -68,7 +72,8 @@ public class ChatController {
                           TerminalStreamRouter terminalStreamRouter,
                           AiModelService modelService,
                           ToolRegistry toolRegistry,
-                          DatabaseRepository<Skill> skillRepository) {
+                          DatabaseRepository<Skill> skillRepository,
+                          SessionEnvironmentService sessionEnvironmentService) {
         this.chatService = chatService;
         this.messaging   = messaging;
         this.aiOrchestrationService = aiOrchestrationService;
@@ -76,12 +81,14 @@ public class ChatController {
         this.modelService = modelService;
         this.toolRegistry = toolRegistry;
         this.skillRepo = skillRepository;
+        this.sessionEnvironmentService = sessionEnvironmentService;
     }
 
     // ── HTTP ──────────────────────────────────────────────────────────────────
 
     @GetMapping("/session")
     public SessionResponse getSession(
+            HttpServletRequest request,
             HttpSession httpSession,
             @RequestParam(defaultValue = "GEMINI") AiProvider provider,
             @RequestParam(required = false) String sessionUuid,
@@ -89,6 +96,7 @@ public class ChatController {
         AiSession session = (sessionUuid == null || sessionUuid.isBlank())
                 ? chatService.getOrCreateSession(httpSession.getId(), provider, modelId)
                 : chatService.getSessionForCurrentUser(sessionUuid);
+        persistRequestBaseUrl(session.uuid(), request);
         return new SessionResponse(session.uuid(), session.name(), session.provider(),
             session.activeAgentTemplateId(), session.messages(), session.modelId(), session.status(),
             session.originMode() != null ? session.originMode().name() : null);
@@ -96,9 +104,11 @@ public class ChatController {
 
     @GetMapping("/session/new")
     public SessionResponse createSession(
+            HttpServletRequest request,
             @RequestParam(defaultValue = "GEMINI") AiProvider provider,
             @RequestParam(required = false) String modelId) {
         AiSession session = chatService.createNewSession(provider, modelId);
+        persistRequestBaseUrl(session.uuid(), request);
         return new SessionResponse(session.uuid(), session.name(), session.provider(),
             session.activeAgentTemplateId(), session.messages(), session.modelId(), session.status(),
             session.originMode() != null ? session.originMode().name() : null);
@@ -392,6 +402,34 @@ public class ChatController {
             log.warn("Unknown provider '{}', defaulting to GEMINI", name);
             return AiProvider.GEMINI;
         }
+    }
+
+    private void persistRequestBaseUrl(String sessionUuid, HttpServletRequest request) {
+        if (sessionUuid == null || sessionUuid.isBlank() || request == null) {
+            return;
+        }
+
+        String baseUrl = RequestOriginContext.resolveBaseUrl(request);
+        if (baseUrl == null || baseUrl.isBlank()) {
+            return;
+        }
+
+        sessionEnvironmentService.setEnv(sessionUuid, "__request_base_url__", baseUrl);
+
+        Map<String, String> env = sessionEnvironmentService.getEnv(sessionUuid);
+        String existingRedirectUri = env.get("redirectUri");
+        if (existingRedirectUri == null || existingRedirectUri.isBlank() || isUnresolvedRedirectUri(existingRedirectUri)) {
+            sessionEnvironmentService.setEnv(sessionUuid, "redirectUri", baseUrl + "/api/oauth/callback");
+        }
+    }
+
+    private static boolean isUnresolvedRedirectUri(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase();
+        return normalized.contains("<your_ip_address>")
+                || (normalized.contains("<") && normalized.contains(">"));
     }
 
     // ── DTOs ──────────────────────────────────────────────────────────────────

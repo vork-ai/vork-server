@@ -104,6 +104,9 @@
     function _buildField(field, sessionUuid) {
         var wrapper = document.createElement('div');
         var inputId = 'auth-field-' + (sessionUuid || 'x') + '-' + field.name;
+        var fieldValue = (field.value != null)
+            ? String(field.value)
+            : ((field.defaultValue != null) ? String(field.defaultValue) : '');
 
         var label = document.createElement('label');
         label.className = 'form-label mb-1';
@@ -116,7 +119,7 @@
         if (type === 'markdown') {
             var mdDiv = document.createElement('div');
             mdDiv.className = 'markdown-body';
-            mdDiv.innerHTML = marked.parse(field.defaultValue || field.placeholder || '');
+            mdDiv.innerHTML = marked.parse(fieldValue || field.placeholder || '');
             wrapper.appendChild(mdDiv);
             return wrapper;
         }
@@ -129,8 +132,16 @@
             if (field.required) sel.required = true;
             (field.options || []).forEach(function (opt) {
                 var option = document.createElement('option');
-                option.value = opt.value;
-                option.textContent = opt.label;
+                if (opt && typeof opt === 'object') {
+                    option.value = (opt.value != null) ? String(opt.value) : '';
+                    option.textContent = (opt.label != null) ? String(opt.label) : option.value;
+                } else {
+                    option.value = String(opt == null ? '' : opt);
+                    option.textContent = option.value;
+                }
+                if (fieldValue && option.value === fieldValue) {
+                    option.selected = true;
+                }
                 sel.appendChild(option);
             });
             wrapper.appendChild(sel);
@@ -141,8 +152,26 @@
             ta.dataset.fieldName = field.name;
             ta.rows = 4;
             if (field.placeholder) ta.placeholder = field.placeholder;
+            if (fieldValue) ta.value = fieldValue;
             if (field.required) ta.required = true;
             wrapper.appendChild(ta);
+        } else if (type === 'checkbox') {
+            var chk = document.createElement('input');
+            chk.className = 'form-check-input';
+            chk.type = 'checkbox';
+            chk.id = inputId;
+            chk.dataset.fieldName = field.name;
+            chk.checked = fieldValue.toLowerCase() === 'true';
+            if (field.required) chk.required = true;
+
+            wrapper.className = 'form-check';
+            wrapper.appendChild(chk);
+
+            var checkLabel = document.createElement('label');
+            checkLabel.className = 'form-check-label ms-2';
+            checkLabel.htmlFor = inputId;
+            checkLabel.textContent = field.label || field.name;
+            wrapper.appendChild(checkLabel);
         } else {
             var inp = document.createElement('input');
             inp.className = 'form-control form-control-sm';
@@ -150,7 +179,8 @@
             inp.id = inputId;
             inp.dataset.fieldName = field.name;
             if (field.placeholder) inp.placeholder = field.placeholder;
-            if (field.defaultValue) inp.value = field.defaultValue;
+            if (fieldValue) inp.value = fieldValue;
+            if (type === 'readonly') inp.readOnly = true;
             if (field.required) inp.required = true;
             wrapper.appendChild(inp);
         }
@@ -164,7 +194,12 @@
         var values = {};
         fields.forEach(function (f) {
             var el = _bodyEl.querySelector('[data-field-name="' + f.name + '"]');
-            if (el) values[f.name] = el.value || '';
+            if (!el) return;
+            if (el.type === 'checkbox') {
+                values[f.name] = el.checked ? 'true' : 'false';
+            } else {
+                values[f.name] = el.value || '';
+            }
         });
         return values;
     }

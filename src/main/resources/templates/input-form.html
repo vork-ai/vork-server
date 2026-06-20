@@ -32,7 +32,13 @@
             <div class="space-y-4 mb-6">
                 <th:block th:each="field : ${fields}">
                     <div>
+                        <input th:if="${field.type == 'HIDDEN'}"
+                               type="hidden"
+                               th:id="${field.name}" th:name="${field.name}"
+                               th:value="${field.value != null ? field.value : field.placeholder}">
+
                         <label class="block text-sm font-medium text-zinc-300 mb-1.5"
+                               th:if="${field.type != 'HIDDEN'}"
                                th:for="${field.name}" th:text="${field.label}"></label>
 
                         <textarea th:if="${field.type == 'TEXTAREA'}"
@@ -40,7 +46,7 @@
                                   rows="4" th:placeholder="${field.placeholder}"
                                   class="w-full bg-zinc-950 border border-zinc-700 text-zinc-100 rounded-lg px-3 py-2 text-sm resize-y
                                          placeholder:text-zinc-600 focus:outline-none focus:border-[#fdaa02] focus:ring-2 focus:ring-[#fdaa02]/25 transition-colors"
-                                  th:text="${field.value}"></textarea>
+                                  th:text="${field.value != null ? field.value : field.placeholder}"></textarea>
 
                         <select th:if="${field.type == 'SELECT'}"
                                 th:id="${field.name}" th:name="${field.name}"
@@ -51,10 +57,11 @@
                                     th:selected="${opt.value == field.value}"></option>
                         </select>
 
-                        <input th:unless="${field.type == 'TEXTAREA' or field.type == 'SELECT'}"
+                           <input th:unless="${field.type == 'TEXTAREA' or field.type == 'SELECT' or field.type == 'HIDDEN'}"
                                th:type="${field.type == 'PASSWORD' ? 'password' : 'text'}"
                                th:id="${field.name}" th:name="${field.name}"
-                               th:value="${field.value}" th:placeholder="${field.placeholder}"
+                               th:value="${field.value != null ? field.value : field.placeholder}" th:placeholder="${field.placeholder}"
+                               th:readonly="${field.type == 'READONLY'}"
                                class="w-full bg-zinc-950 border border-zinc-700 text-zinc-100 rounded-lg px-3 py-2 text-sm
                                       placeholder:text-zinc-600 focus:outline-none focus:border-[#fdaa02] focus:ring-2 focus:ring-[#fdaa02]/25 transition-colors">
                     </div>

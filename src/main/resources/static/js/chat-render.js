@@ -234,9 +234,6 @@
         if (!ctx || !ctx.messagesArea) return;
         const formSchema = frame && frame.formSchema ? frame.formSchema : {};
         const fields = Array.isArray(formSchema.fields) ? formSchema.fields : [];
-        const visibleFields = fields.filter(function (f) {
-            return f && f.name && String(f.type || '').toUpperCase() !== 'HIDDEN';
-        });
 
         const row = document.createElement('div');
         row.className = 'message-row';
@@ -257,17 +254,28 @@
         titleEl.textContent = formSchema.title || frame.intent || 'Authorization required';
         metaEl.textContent = frame.textResponse || 'Provide required input to continue.';
 
-        visibleFields.forEach(function (field) {
+        fields.forEach(function (field) {
+            if (!field || !field.name) return;
             const wrapper = document.createElement('div');
             wrapper.className = 'mb-2';
             const type = String(field.type || 'text').toLowerCase();
+            const source = String(field.source || 'CONVERSATION').toUpperCase();
+
+            if (type === 'hidden') {
+                const hidden = document.createElement('input');
+                hidden.type = 'hidden';
+                hidden.setAttribute('data-field-name', field.name);
+                hidden.value = (field.value != null ? field.value : field.placeholder) || '';
+                fieldsEl.appendChild(hidden);
+                return;
+            }
 
             if (type === 'markdown') {
                 const md = document.createElement('div');
                 md.className = 'prompt-args markdown-body';
                 md.innerHTML = (typeof marked !== 'undefined' && marked.parse)
-                    ? marked.parse(field.defaultValue || field.placeholder || '')
-                    : escapeHtml(field.defaultValue || field.placeholder || '');
+                    ? marked.parse(field.value || field.defaultValue || field.placeholder || '')
+                    : escapeHtml(field.value || field.defaultValue || field.placeholder || '');
                 wrapper.appendChild(md);
                 fieldsEl.appendChild(wrapper);
                 return;
@@ -296,6 +304,12 @@
                 input = document.createElement('input');
                 input.type = 'checkbox';
                 input.className = 'form-check-input';
+            } else if (type === 'readonly') {
+                input = document.createElement('input');
+                input.type = 'text';
+                input.className = 'form-control form-control-sm';
+                input.readOnly = true;
+                input.value = (field.value != null ? field.value : field.placeholder) || '';
             } else {
                 input = document.createElement('input');
                 input.type = (type === 'password') ? 'password' : 'text';
@@ -304,11 +318,23 @@
 
             input.setAttribute('data-field-name', field.name);
             if (field.placeholder && input.type !== 'checkbox') input.placeholder = field.placeholder;
-            if (field.defaultValue != null) {
+            if (field.value != null) {
+                if (input.type === 'checkbox') {
+                    input.checked = String(field.value).toLowerCase() === 'true';
+                } else {
+                    input.value = field.value;
+                }
+            } else if (field.defaultValue != null) {
                 if (input.type === 'checkbox') {
                     input.checked = String(field.defaultValue).toLowerCase() === 'true';
                 } else {
                     input.value = field.defaultValue;
+                }
+            } else if (source === 'CONTEXT' && type !== 'password') {
+                if (input.type === 'checkbox') {
+                    input.checked = String(field.placeholder || '').toLowerCase() === 'true';
+                } else if (field.placeholder) {
+                    input.value = field.placeholder;
                 }
             }
             if (field.required) input.setAttribute('required', 'required');
@@ -328,7 +354,7 @@
             btn.className = 'btn btn-sm prompt-action-btn';
             btn.textContent = actionDef.label || action;
 
-            const style = (actionDef.style || '').toLowerCase();
+            const style = (actionDef.style || actionDef.variant || '').toLowerCase();
             if (style === 'danger') btn.classList.add('btn-danger');
             else if (style === 'success') btn.classList.add('btn-success');
             else btn.classList.add('btn-outline-primary');

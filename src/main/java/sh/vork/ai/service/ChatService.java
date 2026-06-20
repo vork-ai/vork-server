@@ -279,6 +279,18 @@ public class ChatService {
      */
     public AiChatMessage sendMessage(String sessionUuid, String content,
                                      List<String> attachmentUuids, AiProvider provider) {
+        return sendMessage(sessionUuid, content, attachmentUuids, provider, true);
+    }
+
+    /**
+     * Sends content to the AI and optionally persists the triggering USER message.
+     *
+     * @param persistUserMessage when false, the invocation USER message is used only
+     *                           to trigger model execution and is not stored in chat history
+     */
+    public AiChatMessage sendMessage(String sessionUuid, String content,
+                                     List<String> attachmentUuids, AiProvider provider,
+                                     boolean persistUserMessage) {
         AiSession session = getSessionForCurrentUser(sessionUuid);
 
         // Build Spring AI message list from stored history.
@@ -355,7 +367,8 @@ public class ChatService {
         ToolExecutionContext.bindSessionUuid(sessionUuid);
         ToolExecutionContext.hydrate(session.environmentVariables());
         try {
-            return executeAgentLoop(session, history, effectiveContent, media, provider, userMsg, refs);
+            return executeAgentLoop(session, history, effectiveContent, media, provider, userMsg, refs,
+                    persistUserMessage);
         } catch (ToolSuspensionException ex) {
             String simulatedToolCallId = "pending-" + UUID.randomUUID();
             List<ToolCallRef> pendingToolCalls = List.of(
@@ -400,7 +413,9 @@ public class ChatService {
                     ex.getToolName());
 
             List<AiChatMessage> updated = new ArrayList<>(session.messages());
-            updated.add(userMsg);
+            if (persistUserMessage) {
+                updated.add(userMsg);
+            }
             updated.add(awaiting);
                 // Reload session to capture agent stack changes made by executeAgentLoop
                 // (e.g. a delegation that pushed a sub-agent before the suspension fired).
@@ -536,7 +551,8 @@ public class ChatService {
                     content == null ? "" : content, now, userRefs);
 
             try {
-                return executeAgentLoop(session, history, effectiveContent, media, resolvedProvider, userMsg, refs);
+                return executeAgentLoop(session, history, effectiveContent, media, resolvedProvider, userMsg, refs,
+                    true);
             } catch (ToolSuspensionException ex) {
                 String simulatedToolCallId = "pending-" + UUID.randomUUID();
                 List<ToolCallRef> pendingToolCalls = List.of(
@@ -637,7 +653,8 @@ public class ChatService {
             List<Media> media,
             AiProvider provider,
             AiChatMessage userMsg,
-            List<AttachmentRef> refs) {
+            List<AttachmentRef> refs,
+            boolean persistUserMessage) {
 
         String sessionUuid = initialSession.uuid();
         String currentPrompt = initialPrompt;
@@ -769,7 +786,9 @@ public class ChatService {
                     refs.isEmpty() ? null : Collections.unmodifiableList(refs));
 
             List<AiChatMessage> updated = new ArrayList<>(latest.messages());
-            updated.add(userMsg);
+            if (persistUserMessage) {
+                updated.add(userMsg);
+            }
             updated.addAll(transitionMsgs);
             updated.add(aiMsg);
 
@@ -807,7 +826,9 @@ public class ChatService {
             latest = initialSession;
         }
         List<AiChatMessage> updated = new ArrayList<>(latest.messages());
-        updated.add(userMsg);
+        if (persistUserMessage) {
+            updated.add(userMsg);
+        }
         updated.add(aiMsg);
         sessionRepo.save(new AiSession(
                 latest.uuid(), latest.provider(), latest.originMode(),

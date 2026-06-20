@@ -155,7 +155,8 @@ public class BackgroundOrchestrationEngine {
                             sessionUuid,
                             "Proceed.",
                             List.of(),
-                            provider);
+                            provider,
+                            false);
                 } catch (ToolSuspensionException ex) {
                     log.info("Background loop paused by authorization fence [session={}, tool={}]", sessionUuid,
                             ex.getToolName());
@@ -288,7 +289,8 @@ public class BackgroundOrchestrationEngine {
                             sessionUuid,
                             firstRound ? prompt : SKILL_CONTINUE_PROMPT,
                             List.of(),
-                            provider);
+                            provider,
+                            false);
                 } catch (ToolSuspensionException ex) {
                     log.info("Skill loop paused by authorization fence [session={}, tool={}]",
                             sessionUuid, ex.getToolName());

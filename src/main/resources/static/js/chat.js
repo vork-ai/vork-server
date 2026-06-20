@@ -1095,6 +1095,9 @@ function renderPromptRequiredFrame(frame) {
         for (let i = 0; i < fields.length; i++) {
             const f = fields[i];
             if (f && f.name === name) {
+                if (typeof f.value === 'string') {
+                    return f.value;
+                }
                 return typeof f.placeholder === 'string' ? f.placeholder : '';
             }
         }
@@ -1146,13 +1149,16 @@ function renderPromptRequiredFrame(frame) {
                 const fieldType = String(field.type || 'text').toLowerCase();
                 const fieldLabel = (typeof field.label === 'string' && field.label.trim()) ? field.label : fieldName;
                 const fieldPlaceholder = (typeof field.placeholder === 'string') ? field.placeholder : '';
+                const fieldValue = (typeof field.value === 'string')
+                    ? field.value
+                    : ((field.value == null) ? '' : String(field.value));
                 const fieldRequired = !!field.required;
                 const fieldOptions = Array.isArray(field.options) ? field.options : [];
                 const inputId = formIdPrefix + '-' + index;
                 const requiredAttr = fieldRequired ? ' required' : '';
 
                 if (fieldType === 'markdown') {
-                    const markdownContent = (typeof field.placeholder === 'string') ? field.placeholder : '';
+                    const markdownContent = fieldValue || fieldPlaceholder;
                     return (
                         '<div class="prompt-field mb-2">' +
                         '  <div class="prompt-args-inline-label">' + escapeHtml(fieldLabel) + '</div>' +
@@ -1164,13 +1170,15 @@ function renderPromptRequiredFrame(frame) {
                 if ((fieldType === 'select' || fieldType === 'dropdown') && fieldOptions.length > 0) {
                     const optionsHtml = fieldOptions.map(function (option) {
                         const value = String(option || '');
-                        return '<option value="' + escapeHtml(value) + '">' + escapeHtml(value) + '</option>';
+                        const selectedAttr = (fieldValue && value === fieldValue) ? ' selected' : '';
+                        return '<option value="' + escapeHtml(value) + '"' + selectedAttr + '>' + escapeHtml(value) + '</option>';
                     }).join('');
+                    const emptyOptionSelected = !fieldValue ? ' selected' : '';
                     return (
                         '<div class="prompt-field mb-2">' +
                         '  <label class="form-label mb-1" for="' + escapeHtml(inputId) + '">' + escapeHtml(fieldLabel) + '</label>' +
                         '  <select class="form-select form-select-sm" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '"' + requiredAttr + '>' +
-                        '    <option value="">Select a value</option>' +
+                        '    <option value=""' + emptyOptionSelected + '>Select a value</option>' +
                         optionsHtml +
                         '  </select>' +
                         '</div>'
@@ -1181,22 +1189,23 @@ function renderPromptRequiredFrame(frame) {
                     return (
                         '<div class="prompt-field mb-2">' +
                         '  <label class="form-label mb-1" for="' + escapeHtml(inputId) + '">' + escapeHtml(fieldLabel) + '</label>' +
-                        '  <textarea class="form-control form-control-sm" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" rows="4"' + requiredAttr + '></textarea>' +
+                        '  <textarea class="form-control form-control-sm" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '" rows="4"' + requiredAttr + '>' + escapeHtml(fieldValue) + '</textarea>' +
                         '</div>'
                     );
                 }
 
                 if (fieldType === 'hidden') {
-                    return '<input data-field-name="' + escapeHtml(fieldName) + '" type="hidden" value="' + escapeHtml(fieldPlaceholder) + '">';
+                    return '<input data-field-name="' + escapeHtml(fieldName) + '" type="hidden" value="' + escapeHtml(fieldValue || fieldPlaceholder) + '">';
                 }
 
                 if (fieldType === 'checkbox') {
                     const helpText = fieldPlaceholder
                         ? ('<div class="form-text mt-1">' + escapeHtml(fieldPlaceholder) + '</div>')
                         : '';
+                    const checkedAttr = String(fieldValue).toLowerCase() === 'true' ? ' checked' : '';
                     return (
                         '<div class="prompt-field form-check mb-2">' +
-                        '  <input class="form-check-input" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '" type="checkbox" value="true"' + requiredAttr + '>' +
+                        '  <input class="form-check-input" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '" type="checkbox" value="true"' + requiredAttr + checkedAttr + '>' +
                         '  <label class="form-check-label" for="' + escapeHtml(inputId) + '">' + escapeHtml(fieldLabel) + '</label>' +
                         '  ' + helpText +
                         '</div>'
@@ -1204,10 +1213,11 @@ function renderPromptRequiredFrame(frame) {
                 }
 
                 const inputType = fieldType === 'password' ? 'password' : 'text';
+                const readonlyAttr = fieldType === 'readonly' ? ' readonly' : '';
                 return (
                     '<div class="prompt-field mb-2">' +
                     '  <label class="form-label mb-1" for="' + escapeHtml(inputId) + '">' + escapeHtml(fieldLabel) + '</label>' +
-                    '  <input class="form-control form-control-sm" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '" type="' + inputType + '" placeholder="' + escapeHtml(fieldPlaceholder) + '"' + requiredAttr + '>' +
+                    '  <input class="form-control form-control-sm" id="' + escapeHtml(inputId) + '" data-field-name="' + escapeHtml(fieldName) + '" type="' + inputType + '" value="' + escapeHtml(fieldValue) + '" placeholder="' + escapeHtml(fieldPlaceholder) + '"' + readonlyAttr + requiredAttr + '>' +
                     '</div>'
                 );
             }).join('') +

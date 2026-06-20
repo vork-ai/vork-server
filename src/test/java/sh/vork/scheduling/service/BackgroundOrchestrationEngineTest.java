@@ -128,6 +128,7 @@ class BackgroundOrchestrationEngineTest {
         private final BackgroundExecutionContext context;
         private final Mode mode;
         int sendCallCount;
+        boolean lastPersistUserMessage = true;
 
         TestChatService(MapDatabaseRepository<AiSession> sessionRepo,
                         BackgroundExecutionContext context,
@@ -150,7 +151,15 @@ class BackgroundOrchestrationEngineTest {
         @Override
         public AiChatMessage sendMessage(String sessionUuid, String content,
                                          List<String> attachmentUuids, AiProvider provider) {
+            return sendMessage(sessionUuid, content, attachmentUuids, provider, true);
+        }
+
+        @Override
+        public AiChatMessage sendMessage(String sessionUuid, String content,
+                                         List<String> attachmentUuids, AiProvider provider,
+                                         boolean persistUserMessage) {
             sendCallCount++;
+            lastPersistUserMessage = persistUserMessage;
             if (mode == Mode.THROW_SUSPENSION) {
                 throw new ToolSuspensionException("compileJavaType", "{}");
             }
@@ -171,6 +180,32 @@ class BackgroundOrchestrationEngineTest {
             }
             return null;
         }
+    }
+
+    @Test
+    void executeBackgroundTurn_usesNonPersistedResumeInvocationMessages() {
+        MapDatabaseRepository<AiSession> sessionRepo = new MapDatabaseRepository<>(AiSession.class);
+        BackgroundExecutionContext context = new BackgroundExecutionContext();
+        TestChatService chatService = new TestChatService(sessionRepo, context, Mode.MARK_COMPLETE);
+        BackgroundOrchestrationEngine engine = new BackgroundOrchestrationEngine(chatService, sessionRepo, context, null, null);
+
+        String sessionUuid = "bg-non-persisted-resume";
+        sessionRepo.save(new AiSession(
+                sessionUuid,
+                AiProvider.BACKGROUND_SCHEDULER.name(),
+                SessionOriginMode.BACKGROUND,
+                "alice",
+                "Untitled",
+                System.currentTimeMillis(),
+                0,
+                List.of(),
+                AiSession.defaultEnvironmentVariables(),
+                AiSessionStatus.RUNNING, null, null, null, null, null));
+
+        engine.executeBackgroundTurn(sessionUuid, "initial");
+
+        assertEquals(1, chatService.sendCallCount);
+        assertEquals(false, chatService.lastPersistUserMessage);
     }
 
     static final class NoOpMessageChannel implements MessageChannel {

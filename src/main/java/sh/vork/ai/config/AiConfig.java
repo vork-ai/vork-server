@@ -5,6 +5,7 @@ import java.lang.reflect.ParameterizedType;
 import java.lang.reflect.RecordComponent;
 import java.lang.reflect.Type;
 import java.net.URI;
+import java.util.Locale;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
@@ -18,13 +19,21 @@ import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.MDC;
+import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.definition.ToolDefinition;
+import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.web.context.request.RequestContextHolder;
+import org.springframework.web.context.request.ServletRequestAttributes;
+import org.springframework.web.servlet.support.ServletUriComponentsBuilder;
 import org.springframework.util.ClassUtils;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -51,6 +60,8 @@ import sh.vork.ai.function.ListNotificationProvidersRequest;
 import sh.vork.ai.function.ListSshConnectionsRequest;
 import sh.vork.ai.function.ListTypeInstancesRequest;
 import sh.vork.ai.function.LogInfoRequest;
+import sh.vork.ai.function.OAuthConnectRequest;
+import sh.vork.ai.function.OAuthResetRequest;
 import sh.vork.ai.function.SaveTypeInstanceRequest;
 import sh.vork.ai.function.SearchTypeInstancesRequest;
 import sh.vork.ai.function.SendNotificationRequest;
@@ -67,6 +78,12 @@ import sh.vork.ai.security.AuthorizationRuleEngine;
 import sh.vork.ai.security.Restricted;
 import sh.vork.ai.security.SecuredToolCallback;
 import sh.vork.ai.security.VisualizableToolCallback;
+import sh.vork.ai.context.ToolExecutionContext;
+import sh.vork.ai.exception.ToolSuspensionException;
+import sh.vork.ai.protocol.interaction.FieldSource;
+import sh.vork.ai.protocol.interaction.FormAction;
+import sh.vork.ai.protocol.interaction.FormField;
+import sh.vork.ai.protocol.interaction.InteractionFormSchema;
 import sh.vork.ai.tool.CompleteBackgroundTaskRequest;
 import sh.vork.ai.tool.CompleteSkillExecutionRequest;
 import sh.vork.ai.tool.RecordProgressRequest;
@@ -84,16 +101,19 @@ import sh.vork.ai.tool.SshCreateConnectionTool;
 import sh.vork.ai.tool.UploadFileTool;
 import sh.vork.ai.tool.UploadTextFileTool;
 import sh.vork.notification.service.DirectNotificationService;
+import sh.vork.oauth.OAuthClientService;
 import sh.vork.orm.DatabaseRepository;
 import sh.vork.orm.SortOrder;
 import sh.vork.scheduling.domain.JobResult;
 import sh.vork.scheduling.service.BackgroundExecutionContext;
+import sh.vork.security.SecureCredentialStore;
 import sh.vork.typegen.JavaType;
 import sh.vork.typegen.JavaTypeClassLoader;
 import sh.vork.typegen.SqlParseException;
 import sh.vork.typegen.TypeDatabaseService;
 import sh.vork.typegen.TypeGenerationException;
 import sh.vork.typegen.TypeGeneratorService;
+import sh.vork.web.RequestOriginContext;
 
 /**
  * Wires all AI-related Spring beans.
@@ -119,6 +139,7 @@ import sh.vork.typegen.TypeGeneratorService;
 public class AiConfig {
 
     private static final Logger log = LoggerFactory.getLogger(AiConfig.class);
+    private static final String OAUTH_SECRET_CLIENT_SECRET_KEY = "clientSecret";
     public static final String BASE_SYSTEM_PROMPT = """
 You are an autonomous Vork AI agent operating strictly within a turn-based AI 
 orchestration framework. You execute background workflows using function-calling 
@@ -742,6 +763,394 @@ the protocol and will break the system. Do not converse. Execute.
     }
 
     /**
+     * {@code oauthConnect} tool — configure or connect an OAuth client for the
+     * current user, returning a connect URL when consent is required.
+     */
+    @Bean
+    @ToolCategory("Web")
+    public ToolCallback oauthConnect(OAuthClientService oauthClientService,
+                                     SecureCredentialStore secureCredentialStore) {
+        ToolCallback schemaCallback = FunctionToolCallback
+                .builder("oauthConnect", (OAuthConnectRequest req) -> "{}")
+                .description("""
+                    Configure or connect a user-scoped OAuth client. If not yet authorized,
+                    this tool suspends with an input form when configuration or OOB consent is required.
+                    IMPORTANT: infer and populate as many oauthConnect fields as possible from the
+                    user's requested target service (e.g. endpoints, scopes, provider-specific
+                    authorizationParams). Minimize required manual user input.
+                    If this tool returns status=requires_service_defaults, you MUST retry oauthConnect
+                    in the same turn with inferred authorizeEndpoint, tokenEndpoint, scopes,
+                    and authorizationParams before requesting user input.
+                    After callback completion, call this tool again to get status=ready and a Bearer placeholder token key
+                    such as {{OAUTH_GITHUB_ACCESS_TOKEN}} for httpRequest headers.
+                    """.stripIndent())
+                .inputType(OAuthConnectRequest.class)
+                .build();
+
+        ToolDefinition definition = schemaCallback.getToolDefinition();
+        return new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String toolInput) {
+                return call(toolInput, null);
+            }
+
+            @Override
+            public String call(String toolInput, ToolContext toolContext) {
+                OAuthConnectRequest req;
+                try {
+                    req = toolInput == null || toolInput.isBlank()
+                            ? new OAuthConnectRequest(null, null, null, null, null, null, null, null, null)
+                            : objectMapper.readValue(toolInput, OAuthConnectRequest.class);
+                } catch (Exception parseError) {
+                    return "{\"status\":\"error\",\"message\":\"Invalid oauthConnect input JSON\"}";
+                }
+
+                String argumentsJson = safeJson(req);
+                try {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+
+                    OAuthConnectRequest effectiveReq = hydrateOAuthConnectRequest(req, username, secureCredentialStore);
+
+                    List<String> missingServiceFields = missingServiceDefaults(effectiveReq);
+                    if (!missingServiceFields.isEmpty()) {
+                        Map<String, Object> retryHint = new LinkedHashMap<>();
+                        retryHint.put("status", "requires_service_defaults");
+                        retryHint.put("clientName", firstNonBlank(effectiveReq.clientName(), ""));
+                        retryHint.put("missingFields", missingServiceFields);
+                        retryHint.put("message",
+                                "Populate oauthConnect with provider-specific defaults inferred from the target service before requesting user input. "
+                                        + "At minimum include authorizeEndpoint, tokenEndpoint, scopes, and authorizationParams.");
+                        retryHint.put("guidance",
+                                "Retry oauthConnect with inferred values based on the user's target service. "
+                                        + "Do not ask the user for endpoints/scopes if they can be inferred.");
+                        return objectMapper.writeValueAsString(retryHint);
+                    }
+
+                    Map<String, Object> result = oauthClientService.connectOrEnsure(username, effectiveReq);
+
+                    String status = String.valueOf(result.getOrDefault("status", ""));
+                    if ("error".equalsIgnoreCase(status)
+                            && String.valueOf(result.getOrDefault("message", "")).toLowerCase(Locale.ROOT)
+                            .contains("not configured")) {
+                        String suggestedRedirectUri = suggestedRedirectUri();
+                        InteractionFormSchema schema = oauthConfigurationForm(effectiveReq, suggestedRedirectUri);
+                        throw new ToolSuspensionException(
+                                "oauthConnect",
+                                argumentsJson,
+                                "OAuth client configuration is required before authorization can continue.",
+                                schema);
+                    }
+
+                    if ("connect_required".equalsIgnoreCase(status)) {
+                        InteractionFormSchema schema = oauthConsentForm(effectiveReq, result);
+                        throw new ToolSuspensionException(
+                                "oauthConnect",
+                                argumentsJson,
+                                "Complete OAuth consent in your browser, then continue this prompt.",
+                                schema);
+                    }
+
+                    return objectMapper.writeValueAsString(result);
+                } catch (ToolSuspensionException ex) {
+                    throw ex;
+                } catch (Exception e) {
+                    return "{\"status\":\"error\",\"message\":\""
+                            + e.getMessage().replace("\"", "'") + "\"}";
+                }
+            }
+        };
+    }
+
+    /**
+     * {@code oauthReset} tool — clear saved OAuth client state for the current user.
+     */
+    @Bean
+    @ToolCategory("Web")
+    public ToolCallback oauthReset(OAuthClientService oauthClientService) {
+        ToolCallback schemaCallback = FunctionToolCallback
+                .builder("oauthReset", (OAuthResetRequest req) -> "{}")
+                .description("""
+                    Reset a saved OAuth client for the current user.
+                    This deletes persisted OAuth client details (including tokens)
+                    and pending OAuth connect sessions for that client.
+                    Use this before a clean oauthConnect attempt.
+                    """.stripIndent())
+                .inputType(OAuthResetRequest.class)
+                .build();
+
+        ToolDefinition definition = schemaCallback.getToolDefinition();
+        return new ToolCallback() {
+            @Override
+            public ToolDefinition getToolDefinition() {
+                return definition;
+            }
+
+            @Override
+            public String call(String toolInput) {
+                OAuthResetRequest req;
+                try {
+                    req = toolInput == null || toolInput.isBlank()
+                            ? new OAuthResetRequest(null)
+                            : objectMapper.readValue(toolInput, OAuthResetRequest.class);
+                } catch (Exception parseError) {
+                    return "{\"status\":\"error\",\"message\":\"Invalid oauthReset input JSON\"}";
+                }
+
+                String username = resolveUsername();
+                if (username == null || username.isBlank()) {
+                    return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                }
+
+                try {
+                    Map<String, Object> result = oauthClientService.resetClient(username, req.clientName());
+                    return objectMapper.writeValueAsString(result);
+                } catch (Exception e) {
+                    return "{\"status\":\"error\",\"message\":\""
+                            + e.getMessage().replace("\"", "'") + "\"}";
+                }
+            }
+        };
+    }
+
+    private OAuthConnectRequest hydrateOAuthConnectRequest(OAuthConnectRequest req,
+                                                           String username,
+                                                           SecureCredentialStore secureCredentialStore) {
+        String clientName = firstNonBlank(req == null ? null : req.clientName(), contextString("clientName"));
+        String authorizeEndpoint = firstNonBlank(req == null ? null : req.authorizeEndpoint(), contextString("authorizeEndpoint"));
+        String tokenEndpoint = firstNonBlank(req == null ? null : req.tokenEndpoint(), contextString("tokenEndpoint"));
+        String clientId = firstNonBlank(req == null ? null : req.clientId(), contextString("clientId"));
+        String redirectUri = firstNonBlank(req == null ? null : req.redirectUri(), contextString("redirectUri"));
+        if (isUnresolvedRedirectUri(redirectUri)) {
+            redirectUri = null;
+        }
+        if (redirectUri == null || redirectUri.isBlank()) {
+            redirectUri = suggestedRedirectUri();
+        }
+
+        List<String> scopes = (req != null && req.scopes() != null && !req.scopes().isEmpty())
+                ? req.scopes()
+                : parseScopes(contextString("scopes"));
+
+        Map<String, String> authorizationParams = (req != null && req.authorizationParams() != null)
+                ? req.authorizationParams()
+                : parseAuthorizationParams(contextString("authorizationParams"));
+
+        Boolean forceReconnect = req == null ? null : req.forceReconnect();
+        if (forceReconnect == null) {
+            forceReconnect = parseBoolean(contextString("forceReconnect"));
+        }
+
+        String clientSecret = req == null ? null : req.clientSecret();
+        if (clientSecret == null || clientSecret.isBlank()) {
+            clientSecret = secureCredentialStore.getSecretForUser(username, OAUTH_SECRET_CLIENT_SECRET_KEY);
+        }
+
+        return new OAuthConnectRequest(
+                clientName,
+                authorizeEndpoint,
+                tokenEndpoint,
+                clientId,
+                clientSecret,
+                redirectUri,
+                scopes,
+                authorizationParams,
+                forceReconnect);
+    }
+
+    private InteractionFormSchema oauthConfigurationForm(OAuthConnectRequest effectiveReq,
+                                                         String suggestedRedirectUri) {
+        String clientNameValue = firstNonBlank(effectiveReq.clientName(), "gmail");
+        String authorizeEndpointValue = firstNonBlank(effectiveReq.authorizeEndpoint(), "");
+        String tokenEndpointValue = firstNonBlank(effectiveReq.tokenEndpoint(), "");
+        String clientIdValue = firstNonBlank(effectiveReq.clientId(), "");
+        String scopesValue = scopesPlaceholder(effectiveReq.scopes());
+        String authorizationParamsValue = authorizationParamsPlaceholder(effectiveReq.authorizationParams());
+        String forceReconnectValue = String.valueOf(Boolean.TRUE.equals(effectiveReq.forceReconnect()));
+
+        List<FormField> fields = List.of(
+                new FormField("clientName", "TEXT", "clientName", clientNameValue, clientNameValue, true, FieldSource.CONTEXT, null),
+                new FormField("authorizeEndpoint", "TEXT", "authorizeEndpoint", authorizeEndpointValue, authorizeEndpointValue, true, FieldSource.CONTEXT, null),
+                new FormField("tokenEndpoint", "TEXT", "tokenEndpoint", tokenEndpointValue, tokenEndpointValue, true, FieldSource.CONTEXT, null),
+                new FormField("clientId", "TEXT", "clientId", clientIdValue, clientIdValue, true, FieldSource.CONTEXT, null),
+                new FormField("clientSecret", "PASSWORD", "clientSecret (optional for PKCE public clients)", "", null, false, FieldSource.SECRET, null),
+                new FormField("redirectUri", "READONLY", "redirectUri", suggestedRedirectUri, suggestedRedirectUri, true, FieldSource.CONTEXT, null),
+                new FormField("scopes", "TEXTAREA", "scopes (space/comma/newline separated)", scopesValue, scopesValue, false, FieldSource.CONTEXT, null),
+                new FormField("authorizationParams", "TEXTAREA", "authorizationParams JSON", authorizationParamsValue, authorizationParamsValue, false, FieldSource.CONTEXT, null),
+                new FormField("forceReconnect", "CHECKBOX", "forceReconnect", forceReconnectValue, forceReconnectValue, false, FieldSource.CONTEXT, null)
+        );
+
+        return new InteractionFormSchema(
+                "COLLECT_OAUTH_CONNECT_INPUT",
+                "OAuth Configuration Required",
+                "Provide OAuth client details to continue. Register the redirectUri with your provider before authorizing.",
+                fields,
+                List.of(
+                        new FormAction("ONCE", "Save & Continue", "primary"),
+                        new FormAction("DENIED", "Cancel", "danger")
+                ));
+    }
+
+    private InteractionFormSchema oauthConsentForm(OAuthConnectRequest effectiveReq,
+                                                   Map<String, Object> result) {
+        String authorizationUrl = String.valueOf(result.getOrDefault("authorizationUrl", ""));
+        String redirectUri = firstNonBlank(effectiveReq.redirectUri(), suggestedRedirectUri());
+        List<FormField> fields = List.of(
+            new FormField("authorizationUrl", "READONLY", "authorizationUrl", authorizationUrl, authorizationUrl, false, FieldSource.CONTEXT, null),
+            new FormField("redirectUri", "READONLY", "redirectUri", redirectUri, redirectUri, false, FieldSource.CONTEXT, null)
+        );
+
+        return new InteractionFormSchema(
+                "OAUTH_AUTHORIZE_OUT_OF_BAND",
+                "OAuth Authorization Required",
+                "Open authorizationUrl in your browser, complete consent, then click Continue.",
+                fields,
+                List.of(
+                        new FormAction("ONCE", "Continue", "primary"),
+                        new FormAction("DENIED", "Cancel", "danger")
+                ));
+    }
+
+    private static String suggestedRedirectUri() {
+        String requestBaseUrl = RequestOriginContext.resolveBaseUrlFromCurrentRequest();
+        if (requestBaseUrl != null && !requestBaseUrl.isBlank()) {
+            return requestBaseUrl + "/api/oauth/callback";
+        }
+
+        String contextBaseUrl = contextString("__request_base_url__");
+        if (contextBaseUrl != null && !contextBaseUrl.isBlank()) {
+            return contextBaseUrl.trim() + "/api/oauth/callback";
+        }
+
+        try {
+            ServletRequestAttributes attrs = (ServletRequestAttributes) RequestContextHolder.getRequestAttributes();
+            if (attrs != null && attrs.getRequest() != null) {
+                String base = ServletUriComponentsBuilder.fromCurrentContextPath().build().toUriString();
+                return base + "/api/oauth/callback";
+            }
+        } catch (Exception ignored) {
+        }
+        return "https://<your_ip_address>/api/oauth/callback";
+    }
+
+    private static boolean isUnresolvedRedirectUri(String value) {
+        if (value == null || value.isBlank()) {
+            return false;
+        }
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        return normalized.contains("<your_ip_address>")
+                || (normalized.contains("<") && normalized.contains(">"));
+    }
+
+    private static String firstNonBlank(String first, String fallback) {
+        if (first != null && !first.isBlank()) {
+            return first;
+        }
+        return fallback;
+    }
+
+    private static String contextString(String key) {
+        Object value = ToolExecutionContext.get(key);
+        if (value == null) {
+            return null;
+        }
+        return String.valueOf(value);
+    }
+
+    private static Boolean parseBoolean(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        return "true".equalsIgnoreCase(raw.trim()) || "on".equalsIgnoreCase(raw.trim()) || "1".equals(raw.trim());
+    }
+
+    private static List<String> parseScopes(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        List<String> out = new ArrayList<>();
+        String[] parts = raw.split("[\\n,\\s]+");
+        for (String part : parts) {
+            if (part != null && !part.isBlank()) {
+                out.add(part.trim());
+            }
+        }
+        return out.isEmpty() ? null : List.copyOf(out);
+    }
+
+    private Map<String, String> parseAuthorizationParams(String raw) {
+        if (raw == null || raw.isBlank()) {
+            return null;
+        }
+        try {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> parsed = objectMapper.readValue(raw, Map.class);
+            Map<String, String> out = new LinkedHashMap<>();
+            parsed.forEach((k, v) -> {
+                if (k != null && !k.isBlank() && v != null) {
+                    out.put(k, String.valueOf(v));
+                }
+            });
+            return out.isEmpty() ? null : Map.copyOf(out);
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private static String scopesPlaceholder(List<String> scopes) {
+        if (scopes == null || scopes.isEmpty()) {
+            return "";
+        }
+        return String.join("\n", scopes);
+    }
+
+    private String authorizationParamsPlaceholder(Map<String, String> authorizationParams) {
+        if (authorizationParams == null || authorizationParams.isEmpty()) {
+            return "";
+        }
+        try {
+            return objectMapper.writeValueAsString(authorizationParams);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    private String safeJson(Object value) {
+        try {
+            return objectMapper.writeValueAsString(value == null ? Map.of() : value);
+        } catch (Exception e) {
+            return "{}";
+        }
+    }
+
+    private static List<String> missingServiceDefaults(OAuthConnectRequest req) {
+        List<String> missing = new ArrayList<>();
+        if (req == null) {
+            return List.of("authorizeEndpoint", "tokenEndpoint", "scopes", "authorizationParams");
+        }
+        if (req.authorizeEndpoint() == null || req.authorizeEndpoint().isBlank()) {
+            missing.add("authorizeEndpoint");
+        }
+        if (req.tokenEndpoint() == null || req.tokenEndpoint().isBlank()) {
+            missing.add("tokenEndpoint");
+        }
+        if (req.scopes() == null || req.scopes().isEmpty()) {
+            missing.add("scopes");
+        }
+        if (req.authorizationParams() == null || req.authorizationParams().isEmpty()) {
+            missing.add("authorizationParams");
+        }
+        return missing;
+    }
+
+    /**
      * {@code httpRequest} tool — a generic HTTP client that replaces the old
      * {@code getURLContents} tool.  Supports all common methods, custom headers,
      * and a request body so the model can interact with REST APIs, fetch web pages,
@@ -749,7 +1158,7 @@ the protocol and will break the system. Do not converse. Execute.
      */
     @Bean
     @ToolCategory("Web")
-    public ToolCallback httpRequest() {
+    public ToolCallback httpRequest(OAuthClientService oauthClientService) {
         return FunctionToolCallback
                 .builder("httpRequest", (HttpRequestToolRequest req) -> {
                     if (req == null || req.url() == null || req.url().isBlank()) {
@@ -773,9 +1182,14 @@ the protocol and will break the system. Do not converse. Execute.
                                 .timeout(Duration.ofSeconds(30))
                                 .header("User-Agent", "vork-ai-tool/1.0");
 
+                        String username = resolveUsername();
+
                         // Apply caller-supplied headers (User-Agent may be overridden)
                         if (req.headers() != null) {
-                            req.headers().forEach(builder::header);
+                            for (Map.Entry<String, String> entry : req.headers().entrySet()) {
+                                String value = oauthClientService.resolveHeaderValue(username, entry.getValue());
+                                builder.header(entry.getKey(), value);
+                            }
                         }
 
                         // Body publisher
@@ -1315,6 +1729,15 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
             return "system";
         }
         return sessionUuid;
+    }
+
+    private static String resolveUsername() {
+        Authentication auth = SecurityContextHolder.getContext().getAuthentication();
+        if (auth == null || auth.getName() == null || auth.getName().isBlank()
+                || "anonymousUser".equalsIgnoreCase(auth.getName())) {
+            return null;
+        }
+        return auth.getName();
     }
 
 }
