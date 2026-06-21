@@ -11,6 +11,7 @@ public record OAuthConnectSession(
         String uuid,
         String userUuid,
         String clientName,
+    String aiSessionUuid,
         String codeVerifierEncrypted,
         String redirectUri,
         List<String> scopes,

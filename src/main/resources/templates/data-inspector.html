@@ -18,10 +18,10 @@
 <div class="inspector-type-bar">
     <div class="container-fluid d-flex align-items-center gap-3 py-2 px-3">
         <span class="text-muted small fw-semibold text-nowrap">
-            <i class="fa-solid fa-database me-1"></i> Type
+            <i class="fa-solid fa-database me-1"></i> Record
         </span>
         <select id="type-select" class="form-select form-select-sm inspector-type-select">
-            <option value="">— select a type —</option>
+            <option value="">— select a record schema —</option>
         </select>
         <div id="type-actions" class="d-none d-flex align-items-center gap-2 ms-auto">
             <span id="type-count-badge" class="badge text-bg-secondary"></span>
@@ -61,6 +61,20 @@
 
     <!-- Data table -->
     <div id="state-table" class="inspector-state d-none">
+        <div class="d-flex flex-column flex-md-row gap-2 mb-3 align-items-md-center">
+            <select id="search-query-type" class="form-select form-select-sm" style="max-width: 140px;">
+                <option value="SQL" selected>SQL</option>
+                <option value="MONGO">Mongo JSON</option>
+            </select>
+            <input id="search-query" type="text" class="form-control form-control-sm"
+                   placeholder="Search records (e.g. status = 'ACTIVE' AND age >= 2)">
+            <button id="search-apply-btn" type="button" class="btn btn-sm btn-outline-primary text-nowrap">
+                <i class="fa-solid fa-magnifying-glass me-1"></i>Search
+            </button>
+            <button id="search-clear-btn" type="button" class="btn btn-sm btn-outline-secondary text-nowrap">
+                <i class="fa-solid fa-xmark me-1"></i>Clear
+            </button>
+        </div>
         <div class="table-responsive">
             <table class="table table-sm table-hover inspector-table align-middle mb-0">
                 <thead id="table-head"></thead>

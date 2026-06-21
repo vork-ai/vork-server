@@ -11,6 +11,10 @@
     var createBtn       = document.getElementById('create-btn');
     var tableHead       = document.getElementById('table-head');
     var tableBody       = document.getElementById('table-body');
+    var searchQueryType = document.getElementById('search-query-type');
+    var searchQuery     = document.getElementById('search-query');
+    var searchApplyBtn  = document.getElementById('search-apply-btn');
+    var searchClearBtn  = document.getElementById('search-clear-btn');
     var prevBtn         = document.getElementById('prev-btn');
     var nextBtn         = document.getElementById('next-btn');
     var paginationInfo  = document.getElementById('pagination-info');
@@ -29,6 +33,8 @@
     var currentPage   = 0;
     var pageSize      = 20;
     var totalCount    = 0;
+    var activeQuery   = '';
+    var activeQueryType = 'SQL';
 
     // ── Boot: populate type selector ──────────────────────────────────────────
 
@@ -65,11 +71,17 @@
             typeActions.classList.add('d-none');
             currentFqn = null;
             currentSchema = null;
+            activeQuery = '';
+            activeQueryType = 'SQL';
             return;
         }
         window.location.hash = fqn;
         currentFqn = fqn;
         currentPage = 0;
+        activeQuery = '';
+        activeQueryType = 'SQL';
+        if (searchQuery) searchQuery.value = '';
+        if (searchQueryType) searchQueryType.value = 'SQL';
         showState('loading');
         typeActions.classList.add('d-none');
 
@@ -90,22 +102,43 @@
 
     // ── Data loading ──────────────────────────────────────────────────────────
 
+    function hasActiveSearch() {
+        return activeQuery && activeQuery.trim().length > 0;
+    }
+
     function loadPage(fqn, page) {
         showState('loading');
-        var countPromise = fetch('/api/types/' + encodeURIComponent(fqn) + '/count')
-            .then(function (r) { return r.ok ? r.json() : Promise.reject('count error'); })
-            .then(function (d) { return d.count || 0; });
+        var countPromise;
+        var listPromise;
 
-        var listPromise = fetch(
-            '/api/types/' + encodeURIComponent(fqn) + '/list?page=' + page + '&pageSize=' + pageSize
-        ).then(function (r) { return r.ok ? r.json() : Promise.reject('list error'); });
+        if (hasActiveSearch()) {
+            var encodedQuery = encodeURIComponent(activeQuery.trim());
+            var encodedType = encodeURIComponent(activeQueryType || 'SQL');
+            var base = '/api/types/' + encodeURIComponent(fqn) + '/search';
+            countPromise = fetch(base + '/count?query=' + encodedQuery + '&queryType=' + encodedType)
+                .then(function (r) { return r.ok ? r.json() : r.json().then(function (e) { return Promise.reject(e.message || 'search count error'); }); })
+                .then(function (d) { return d.count || 0; });
+            listPromise = fetch(
+                base + '?query=' + encodedQuery + '&queryType=' + encodedType + '&page=' + page + '&pageSize=' + pageSize
+            ).then(function (r) { return r.ok ? r.json() : r.json().then(function (e) { return Promise.reject(e.message || 'search error'); }); })
+                .then(function (payload) { return payload.results || []; });
+        } else {
+            countPromise = fetch('/api/types/' + encodeURIComponent(fqn) + '/count')
+                .then(function (r) { return r.ok ? r.json() : Promise.reject('count error'); })
+                .then(function (d) { return d.count || 0; });
+
+            listPromise = fetch(
+                '/api/types/' + encodeURIComponent(fqn) + '/list?page=' + page + '&pageSize=' + pageSize
+            ).then(function (r) { return r.ok ? r.json() : Promise.reject('list error'); });
+        }
 
         return Promise.all([countPromise, listPromise]).then(function (results) {
-            totalCount  = results[0];
-            var items   = results[1];
+            totalCount = results[0];
+            var items = results[1];
             currentPage = page;
 
-            typeCountBadge.textContent = totalCount + ' record' + (totalCount !== 1 ? 's' : '');
+            var baseCountLabel = totalCount + ' record' + (totalCount !== 1 ? 's' : '');
+            typeCountBadge.textContent = hasActiveSearch() ? (baseCountLabel + ' (filtered)') : baseCountLabel;
             typeActions.classList.remove('d-none');
 
             if (items.length === 0 && page === 0) {
@@ -116,6 +149,40 @@
             renderTable(currentSchema, items);
             updatePagination();
             showState('table');
+        });
+    }
+
+    if (searchApplyBtn) {
+        searchApplyBtn.addEventListener('click', function () {
+            if (!currentFqn) return;
+            activeQuery = searchQuery ? searchQuery.value : '';
+            activeQueryType = searchQueryType ? searchQueryType.value : 'SQL';
+            currentPage = 0;
+            loadPage(currentFqn, 0).catch(function (err) {
+                showError('Search failed: ' + err);
+            });
+        });
+    }
+
+    if (searchClearBtn) {
+        searchClearBtn.addEventListener('click', function () {
+            if (!currentFqn) return;
+            activeQuery = '';
+            activeQueryType = 'SQL';
+            if (searchQuery) searchQuery.value = '';
+            if (searchQueryType) searchQueryType.value = 'SQL';
+            currentPage = 0;
+            loadPage(currentFqn, 0).catch(function (err) {
+                showError('Reload failed: ' + err);
+            });
+        });
+    }
+
+    if (searchQuery) {
+        searchQuery.addEventListener('keydown', function (event) {
+            if (event.key !== 'Enter') return;
+            event.preventDefault();
+            if (searchApplyBtn) searchApplyBtn.click();
         });
     }
 

@@ -150,6 +150,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
         private final sh.vork.skill.SkillToolCallbackFactory skillToolCallbackFactory;
         private final ToolCallback listAvailableToolsCallback;
         private final ToolCallback listAgentTemplatesCallback;
+        private final ToolCallback getDateTimeCallback;
         private final ToolCallback recordProgressCallback;
         private final ToolCallback thinkCallback;
         private final sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor;
@@ -168,6 +169,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                                                                   sh.vork.skill.SkillToolCallbackFactory skillToolCallbackFactory,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("listAvailableTools") ToolCallback listAvailableToolsCallback,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("listAgentTemplates") ToolCallback listAgentTemplatesCallback,
+                                                                  @org.springframework.beans.factory.annotation.Qualifier("getDateTime") ToolCallback getDateTimeCallback,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("recordProgress") ToolCallback recordProgressCallback,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("think") ToolCallback thinkCallback,
                                                                   sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor,
@@ -184,12 +186,47 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                 this.skillToolCallbackFactory = skillToolCallbackFactory;
                 this.listAvailableToolsCallback = listAvailableToolsCallback;
                 this.listAgentTemplatesCallback = listAgentTemplatesCallback;
+                this.getDateTimeCallback = getDateTimeCallback;
                 this.recordProgressCallback = recordProgressCallback;
                 this.thinkCallback = thinkCallback;
                 this.skillSecretSubstitutor = skillSecretSubstitutor;
                 this.beanFactory = beanFactory;
                 this.objectMapper = objectMapper;
     }
+
+        public AiOrchestrationService(Map<AiProvider, ChatClient> chatClientRegistry,
+                                                                  AiChatClientFactory chatClientFactory,
+                                                                  SessionEnvironmentService sessionEnvironmentService,
+                                                                  DatabaseRepository<AiSession> aiSessionRepository,
+                                                                  DatabaseRepository<AgentTemplate> agentTemplateRepository,
+                                                                  DatabaseRepository<sh.vork.skill.Skill> skillRepository,
+                                                                  Map<String, ToolCallback> securedToolCallbackMap,
+                                                                  SessionToolStore sessionToolStore,
+                                                                  sh.vork.skill.SkillToolCallbackFactory skillToolCallbackFactory,
+                                                                  ToolCallback listAvailableToolsCallback,
+                                                                  ToolCallback listAgentTemplatesCallback,
+                                                                  ToolCallback getDateTimeCallback,
+                                                                  ToolCallback recordProgressCallback,
+                                                                  ToolCallback thinkCallback,
+                                                                  sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor) {
+                this(chatClientRegistry,
+                        chatClientFactory,
+                        sessionEnvironmentService,
+                        aiSessionRepository,
+                        agentTemplateRepository,
+                        skillRepository,
+                        securedToolCallbackMap,
+                        sessionToolStore,
+                        skillToolCallbackFactory,
+                        listAvailableToolsCallback,
+                        listAgentTemplatesCallback,
+                        getDateTimeCallback,
+                        recordProgressCallback,
+                        thinkCallback,
+                        skillSecretSubstitutor,
+                        null,
+                        new ObjectMapper());
+        }
 
         public AiOrchestrationService(Map<AiProvider, ChatClient> chatClientRegistry,
                                                                   AiChatClientFactory chatClientFactory,
@@ -216,6 +253,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                         skillToolCallbackFactory,
                         listAvailableToolsCallback,
                         listAgentTemplatesCallback,
+                        null,
                         recordProgressCallback,
                         thinkCallback,
                         skillSecretSubstitutor,
@@ -727,6 +765,9 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                 if (presentNames.add("recordProgress") && recordProgressCallback != null) {
                         merged.add(recordProgressCallback);
                 }
+                if (presentNames.add("getDateTime") && getDateTimeCallback != null) {
+                        merged.add(getDateTimeCallback);
+                }
                 // think is mandatory — always available regardless of skill-frame depth.
                 if (presentNames.add("think")) merged.add(thinkCallback);
                 tools = merged.toArray(ToolCallback[]::new);
@@ -1037,6 +1078,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
 
                 // think is always available.
                 names.add("think");
+                names.add("getDateTime");
 
                 return Set.copyOf(names);
         }

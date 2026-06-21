@@ -28,9 +28,9 @@ services:
   # ── Vork application ─────────────────────────────────────────────────────────
   vork:
     build:
-      # Parent directory so both jadaptive-orm/ and vork-prototype/ are in scope
-      context: ..
-      dockerfile: vork-prototype/Dockerfile
+      # Build directly from this repository root
+      context: .
+      dockerfile: Dockerfile
     restart: unless-stopped
     depends_on:
       mongodb:

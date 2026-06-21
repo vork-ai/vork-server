@@ -27,6 +27,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import sh.vork.ai.function.OAuthConnectRequest;
 import sh.vork.ai.security.encrypt.EncryptionService;
+import sh.vork.ai.context.ToolExecutionContext;
 import sh.vork.orm.DatabaseRepository;
 import sh.vork.orm.RepositoryFactory;
 import sh.vork.orm.SearchQuery;
@@ -112,12 +113,14 @@ public class OAuthClientService {
         List<String> scopes = requestedScopes(req, existing);
         Map<String, String> authorizationParams = requestedAuthorizationParams(req, existing);
         String authorizationUrl = buildAuthorizationUrl(existing, state, codeChallenge, scopes, authorizationParams);
+        String aiSessionUuid = ToolExecutionContext.getSessionUuid();
 
         long now = System.currentTimeMillis();
         connectSessionRepository.save(new OAuthConnectSession(
                 state,
                 userUuid,
                 normalizedClientName,
+            aiSessionUuid,
                 encryptionService.encrypt(codeVerifier),
                 existing.redirectUri(),
                 scopes,
@@ -180,6 +183,7 @@ public class OAuthClientService {
             return Map.of(
                     "status", "ok",
                     "clientName", normalizedClientName,
+                    "sessionUuid", connectSession.aiSessionUuid() == null ? "" : connectSession.aiSessionUuid(),
                     "secretKey", accessTokenPlaceholder(normalizedClientName),
                     "placeholder", "{{" + accessTokenPlaceholder(normalizedClientName) + "}}");
         } catch (Exception ex) {

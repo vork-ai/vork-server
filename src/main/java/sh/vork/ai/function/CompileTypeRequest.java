@@ -17,6 +17,7 @@ public record CompileTypeRequest(
 Complete Java source code for a single compilation unit, including a package declaration.
 Use package sub-package of {@code sh.vork.generated} for all AI-generated types. " +
 Supports record, class, interface, and enum declarations.
+If the user asks to create a record or enum, this schema should be used.
          """)
         String source
 ) {}

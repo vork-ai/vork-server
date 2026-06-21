@@ -2,11 +2,13 @@ package sh.vork.typegen.controller;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import sh.vork.orm.DatabaseRepository;
+import sh.vork.orm.SortOrder;
 import sh.vork.typegen.DisplayField;
 import sh.vork.typegen.FormConversionException;
 import sh.vork.typegen.FormToObjectConverter;
 import sh.vork.typegen.JavaType;
 import sh.vork.typegen.JavaTypeClassLoader;
+import sh.vork.typegen.SqlParseException;
 import sh.vork.typegen.TypeDatabaseService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -40,6 +42,8 @@ import java.util.stream.Stream;
  * <pre>
  *   GET    /api/types/{fqn}/list?page=0&pageSize=20    – paginated list (JSON)
  *   GET    /api/types/{fqn}/count                      – document count (JSON)
+ *   GET    /api/types/{fqn}/search?...                 – filtered list (JSON)
+ *   GET    /api/types/{fqn}/search/count?...           – filtered count (JSON)
  *   GET    /api/types/{fqn}/{uuid}                     – single entity (JSON)
  *   POST   /api/types/{fqn}                            – save (multipart form)
  *   DELETE /api/types/{fqn}/{uuid}                     – delete
@@ -107,11 +111,11 @@ public class TypeDatabaseController {
     }
 
     // -------------------------------------------------------------------------
-    // Java types listing — for the Data Inspector type selector
+    // Record schemas listing — for the Data Inspector selector
     // -------------------------------------------------------------------------
 
     /**
-     * Returns a summary of every custom Java type compiled and persisted to
+    * Returns a summary of every custom schema compiled and persisted to
      * MongoDB that is a top-level entity (i.e. implements
      * {@link sh.vork.orm.DatabaseEntity}).
      *
@@ -272,7 +276,7 @@ public class TypeDatabaseController {
         return null;
     }
 
-    /** Infers a sensible HTML input type from a Java type. */
+    /** Infers a sensible HTML input type from a field type. */
     private static String inferInputType(Class<?> type) {
         if (type == boolean.class || type == Boolean.class)               return "checkbox";
         if (type == int.class || type == Integer.class
@@ -294,7 +298,7 @@ public class TypeDatabaseController {
                 || type == java.math.BigDecimal.class;
     }
 
-    /** Returns a schema type name string for a Java type. */
+    /** Returns a schema type name string for a field type. */
     private static String simpleTypeName(Class<?> type) {
         if (type == String.class)                                          return "string";
         if (type == boolean.class || type == Boolean.class)               return "boolean";
@@ -431,6 +435,86 @@ public class TypeDatabaseController {
         }
         typeDatabaseService.delete(entityClass, uuid);
         return ResponseEntity.ok("{\"status\":\"ok\"}");
+    }
+
+    // -------------------------------------------------------------------------
+    // Search
+    // -------------------------------------------------------------------------
+
+    @GetMapping(value = "/{fqn}/search", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> search(
+            @PathVariable String fqn,
+            @RequestParam String query,
+            @RequestParam(defaultValue = "SQL") String queryType,
+            @RequestParam(defaultValue = "uuid") String sortField,
+            @RequestParam(defaultValue = "ASC") String sortOrder,
+            @RequestParam(defaultValue = "0") int page,
+            @RequestParam(defaultValue = "20") int pageSize) {
+
+        Class<?> entityClass = resolveClass(fqn);
+        if (entityClass == null) {
+            return notFound("Type not found: " + fqn);
+        }
+
+        try {
+            SortOrder order = "DESC".equalsIgnoreCase(sortOrder) ? SortOrder.DESC : SortOrder.ASC;
+            boolean mongo = "MONGO".equalsIgnoreCase(queryType);
+
+            List<Object> items = new ArrayList<>();
+            long total;
+
+            if (mongo) {
+                try (Stream<Object> stream = typeDatabaseService.searchByMongoFilter(
+                        entityClass, query, page, pageSize, sortField, order)) {
+                    stream.forEach(items::add);
+                }
+                total = typeDatabaseService.searchCountByMongoFilter(entityClass, query);
+            } else {
+                try (Stream<Object> stream = typeDatabaseService.searchBySql(
+                        entityClass, query, page, pageSize, sortField, order)) {
+                    stream.forEach(items::add);
+                }
+                total = typeDatabaseService.searchCountBySql(entityClass, query);
+            }
+
+            Map<String, Object> payload = new LinkedHashMap<>();
+            payload.put("total", total);
+            payload.put("page", page);
+            payload.put("pageSize", pageSize);
+            payload.put("results", items);
+            return ResponseEntity.ok(objectMapper.writeValueAsString(payload));
+        } catch (SqlParseException e) {
+            return ResponseEntity.badRequest()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"status\":\"error\",\"message\":\"SQL parse error: " + escape(e.getMessage()) + "\"}");
+        } catch (Exception e) {
+            return error("Search failed: " + e.getMessage());
+        }
+    }
+
+    @GetMapping(value = "/{fqn}/search/count", produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<String> searchCount(
+            @PathVariable String fqn,
+            @RequestParam String query,
+            @RequestParam(defaultValue = "SQL") String queryType) {
+
+        Class<?> entityClass = resolveClass(fqn);
+        if (entityClass == null) {
+            return notFound("Type not found: " + fqn);
+        }
+
+        try {
+            long count = "MONGO".equalsIgnoreCase(queryType)
+                    ? typeDatabaseService.searchCountByMongoFilter(entityClass, query)
+                    : typeDatabaseService.searchCountBySql(entityClass, query);
+            return ResponseEntity.ok("{\"count\":" + count + "}");
+        } catch (SqlParseException e) {
+            return ResponseEntity.badRequest()
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body("{\"status\":\"error\",\"message\":\"SQL parse error: " + escape(e.getMessage()) + "\"}");
+        } catch (Exception e) {
+            return error("Search count failed: " + e.getMessage());
+        }
     }
 
     // -------------------------------------------------------------------------

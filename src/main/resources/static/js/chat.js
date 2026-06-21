@@ -1278,6 +1278,18 @@ function renderPromptRequiredFrame(frame) {
                 return;
             }
 
+            const schemaIntent = (frame && frame.formSchema && typeof frame.formSchema.intent === 'string')
+                ? frame.formSchema.intent
+                : '';
+            if (schemaIntent === 'OAUTH_AUTHORIZE_OUT_OF_BAND' && action !== 'DENIED') {
+                const authorizationUrl = String(fieldValues.authorizationUrl || '').trim();
+                if (authorizationUrl) {
+                    row.querySelectorAll('.prompt-action-btn').forEach(function (b) { b.disabled = true; });
+                    window.location.href = authorizationUrl;
+                    return;
+                }
+            }
+
             sendAuthorizationAction(frame.eventId, frame.intent, action, fieldValues);
             row.querySelectorAll('.prompt-action-btn').forEach(function (b) { b.disabled = true; });
         });

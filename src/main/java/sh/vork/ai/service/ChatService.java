@@ -1347,7 +1347,7 @@ public class ChatService {
 
     private static String defaultAuthorizationReason(String toolName) {
         if ("compileJavaType".equals(toolName)) {
-            return "Approval is required to compile and register a new Java type so it can be used in later steps.";
+            return "Approval is required to compile and register a new record/enum schema so it can be used in later steps.";
         }
         return "Approval is required to run this protected action so your request can continue safely.";
     }

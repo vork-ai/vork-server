@@ -3,7 +3,7 @@
 ## Quick start (local)
 
 ```bash
-cd vork-prototype
+cd vork-server
 cp .env.example .env          # then fill in GEMINI_API_KEY
 docker compose up --build
 ```
@@ -13,7 +13,7 @@ MongoDB data is persisted in the `mongodb_data` Docker volume.
 
 ### `.env` file
 
-Create a `.env` file in `vork-prototype/` (next to `docker-compose.yml`):
+Create a `.env` file in `vork-server/` (next to `docker-compose.yml`):
 
 ```
 GEMINI_API_KEY=your-key-here
@@ -35,10 +35,10 @@ docker buildx create --name multi --driver docker-container --bootstrap --use
 
 ### Build and push
 
-Run from inside `vork-prototype/` — the `..` build context includes the sibling `jadaptive-orm/` project:
+Run from inside `vork-server/`:
 
 ```bash
-cd vork-prototype
+cd vork-server
 
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
@@ -46,7 +46,7 @@ docker buildx build \
   --tag yourusername/vork:latest \
   --tag yourusername/vork:1.0.0 \
   --push \
-  ..
+  .
 ```
 
 Log in first if needed:
@@ -65,7 +65,7 @@ docker buildx build \
   --file Dockerfile \
   --tag yourusername/vork:latest \
   --load \
-  ..
+  .
 ```
 
 ### Verify the published manifest

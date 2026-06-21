@@ -177,6 +177,7 @@ class OAuthClientServiceTest {
                                 "state-1",
                                 "alice",
                                 "gmail",
+                                "session-1",
                                 "enc:verifier",
                                 "https://app.example.com/api/oauth/callback",
                                 List.of("https://www.googleapis.com/auth/gmail.readonly"),

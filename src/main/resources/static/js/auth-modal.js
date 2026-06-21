@@ -91,7 +91,17 @@
             btn.className = 'btn btn-' + ((action.style || '').toLowerCase() || 'primary');
             btn.textContent = action.label || action.name;
             btn.addEventListener('click', function () {
-                _submit(sessionUuid, eventId, action.name, _collectFields(fields), onDone);
+                var values = _collectFields(fields);
+                var schemaIntent = (formSchema && typeof formSchema.intent === 'string') ? formSchema.intent : '';
+                if (schemaIntent === 'OAUTH_AUTHORIZE_OUT_OF_BAND' && action.name !== 'DENIED') {
+                    var authUrl = String(values.authorizationUrl || '').trim();
+                    if (authUrl) {
+                        _bsModal.hide();
+                        window.location.href = authUrl;
+                        return;
+                    }
+                }
+                _submit(sessionUuid, eventId, action.name, values, onDone);
             });
             _footerEl.appendChild(btn);
         });

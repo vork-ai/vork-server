@@ -50,6 +50,8 @@ import sh.vork.ai.function.DeleteTypeInstanceRequest;
 import sh.vork.ai.function.DisconnectSshRequest;
 import sh.vork.ai.function.DownloadFileRequest;
 import sh.vork.ai.function.ExecuteTerminalCommandRequest;
+import sh.vork.ai.function.GetDateTimeRequest;
+import sh.vork.ai.function.GetTypeInstanceRequest;
 import sh.vork.ai.function.GetTypeSchemaRequest;
 import sh.vork.ai.function.HttpRequestToolRequest;
 import sh.vork.ai.function.ListAgentTemplatesRequest;
@@ -62,6 +64,7 @@ import sh.vork.ai.function.ListTypeInstancesRequest;
 import sh.vork.ai.function.LogInfoRequest;
 import sh.vork.ai.function.OAuthConnectRequest;
 import sh.vork.ai.function.OAuthResetRequest;
+import sh.vork.ai.function.CountTypeInstancesRequest;
 import sh.vork.ai.function.SaveTypeInstanceRequest;
 import sh.vork.ai.function.SearchTypeInstancesRequest;
 import sh.vork.ai.function.SendNotificationRequest;
@@ -597,6 +600,28 @@ the protocol and will break the system. Do not converse. Execute.
                 .build();
     }
 
+    /**
+     * Hidden meta-tool that returns the current local system date and time.
+     * Available in every AI turn to support time-aware planning and responses.
+     */
+    @Bean("getDateTime")
+    @Hidden
+    @ToolCategory("Meta")
+    public ToolCallback getDateTime() {
+        return FunctionToolCallback
+                .builder("getDateTime", (GetDateTimeRequest req) -> {
+                    java.time.ZonedDateTime now = java.time.ZonedDateTime.now();
+                    return "{\"status\":\"ok\","
+                            + "\"isoDateTime\":\"" + now.format(java.time.format.DateTimeFormatter.ISO_ZONED_DATE_TIME) + "\"," 
+                            + "\"localDate\":\"" + now.toLocalDate() + "\"," 
+                            + "\"localTime\":\"" + now.toLocalTime().withNano(0) + "\"," 
+                            + "\"zoneId\":\"" + now.getZone().getId() + "\"}";
+                })
+                .description("Return the current local system date and time, including timezone.")
+                .inputType(GetDateTimeRequest.class)
+                .build();
+    }
+
             @Bean
             @Restricted
             @ToolCategory("Command Execution")
@@ -1001,19 +1026,18 @@ the protocol and will break the system. Do not converse. Execute.
     private InteractionFormSchema oauthConsentForm(OAuthConnectRequest effectiveReq,
                                                    Map<String, Object> result) {
         String authorizationUrl = String.valueOf(result.getOrDefault("authorizationUrl", ""));
-        String redirectUri = firstNonBlank(effectiveReq.redirectUri(), suggestedRedirectUri());
+        String clientName = firstNonBlank(effectiveReq.clientName(), "provider");
         List<FormField> fields = List.of(
-            new FormField("authorizationUrl", "READONLY", "authorizationUrl", authorizationUrl, authorizationUrl, false, FieldSource.CONTEXT, null),
-            new FormField("redirectUri", "READONLY", "redirectUri", redirectUri, redirectUri, false, FieldSource.CONTEXT, null)
+            new FormField("authorizationUrl", "HIDDEN", "authorizationUrl", authorizationUrl, authorizationUrl, false, FieldSource.CONTEXT, null)
         );
 
         return new InteractionFormSchema(
                 "OAUTH_AUTHORIZE_OUT_OF_BAND",
                 "OAuth Authorization Required",
-                "Open authorizationUrl in your browser, complete consent, then click Continue.",
+            "Connect your account to continue.",
                 fields,
                 List.of(
-                        new FormAction("ONCE", "Continue", "primary"),
+                new FormAction("ONCE", "Connect to " + clientName, "primary"),
                         new FormAction("DENIED", "Cancel", "danger")
                 ));
     }
@@ -1267,7 +1291,7 @@ the protocol and will break the system. Do not converse. Execute.
     }
 
     /**
-     * {@code compileJavaType} tool — compiles a Java type from source code
+     * {@code compileJavaType} tool — compiles a Java schema from source code
      * supplied by the model, persists it to MongoDB, and loads it into the
      * running JVM so it is available for subsequent operations.
      *
@@ -1294,8 +1318,8 @@ the protocol and will break the system. Do not converse. Execute.
                 })
                 .description(
                         """
-Compile a Java type (record, class, interface, or enum) from source code and load it into the running application. 
-The type is persisted to MongoDB and will be available after a restart. 
+Compile a Java schema (record, class, interface, or enum) from source code and load it into the running application. 
+The schema is persisted to MongoDB and will be available after a restart. 
 Returns the fully-qualified class name on success. 
 If a type implements sh.vork.orm.DatabaseEntity, uuid must be String (String uuid(); and field/component type String), never java.util.UUID. 
 Any record should implement sh.vork.orm.DatabaseEntity. 
@@ -1303,7 +1327,8 @@ All types should use a sub-package of sh.vork.generated.
 When generating a record that will be managed in the Data Inspector UI, annotate record components with @sh.vork.typegen.DisplayField to control table columns and form rendering. Example: @DisplayField(label="Full Name", order=1, tableColumn=true, inputType="text", required=true). Fields not annotated with tableColumn=true will not appear in the table but will still appear in the create/edit form. Use tableColumn=false for nested records, long text, and list fields.
 Embedded value-object types (e.g. Address, LineItem) that are only used as nested fields inside a parent record MUST NOT implement DatabaseEntity and MUST NOT have a uuid field. Only top-level records that are stored and queried independently should implement DatabaseEntity. This distinction controls which types appear in the Data Inspector dropdown.
 When generating an enum and there is enough context to give each constant a human-readable display name (e.g. country names, status labels, category titles), always add a single String constructor field and a getLabel() accessor: private final String label; EnumName(String label) { this.label = label; } public String getLabel() { return label; }. This enables the Data Inspector to show readable labels in dropdowns and table columns instead of raw constant names. If there is no meaningful display name beyond the constant name itself, omit the field.
-REASONING_HINT: Authorization is required to compile {{type_name}}.
+If a user asks in natural language to "create a record", "create an enum", "define a record", or "model a record", use this tool.
+REASONING_HINT: Authorization is required to compile {{type_name}} record/enum schema.
                                 """
                                 .stripIndent())
                 .inputType(CompileTypeRequest.class)
@@ -1325,7 +1350,7 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
     }
 
     /**
-     * {@code listJavaTypes} tool — returns all custom Java types that have been
+     * {@code listJavaTypes} tool — returns all custom schemas that have been
      * compiled and persisted to MongoDB via {@link #compileJavaType}.
      */
     @Bean
@@ -1347,7 +1372,7 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                List all custom Java types that have been compiled and persisted to MongoDB. Returns each type's fully-qualified class name, number of class files (including inner classes), and the date it was first created.
+                                List all custom schemas (records/enums/classes) that have been compiled and persisted to MongoDB. Returns each schema's fully-qualified class name, number of class files (including inner classes), and the date it was first created.
                                 """
                                 .stripIndent())
                 .inputType(ListJavaTypesRequest.class)
@@ -1372,8 +1397,8 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                Retrieve the stored Java source code for a compiled type by its fully-qualified class name. \
-                                Use this before modifying a type so you can read the existing definition and make targeted changes \
+                                Retrieve the stored Java source code for a compiled schema by its fully-qualified class name. \
+                                Use this before modifying a record/enum so you can read the existing definition and make targeted changes \
                                 rather than rewriting it from scratch.
                                 """
                                 .stripIndent())
@@ -1403,7 +1428,7 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                Get the JSON schema for a custom Java type by its fully-qualified class name. Use listJavaTypes first to discover available types.
+                                Get the JSON field schema for a custom record by its fully-qualified class name. Use listJavaTypes first to discover available schemas.
                                 """
                                 .stripIndent())
                 .inputType(GetTypeSchemaRequest.class)
@@ -1434,10 +1459,41 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                Save (create or update) an instance of a custom Java type. Provide the fully-qualified class name and a JSON string representing the instance. The JSON must include a uuid field — generate a random UUID v4 string for new instances. Use getTypeSchema to discover the required fields first.
+                                Save (create or update) a record instance. Provide the fully-qualified class name and a JSON string representing the record. The JSON must include a uuid field — generate a random UUID v4 string for new instances. Use getTypeSchema to discover the required fields first.
                                 """
                                 .stripIndent())
                 .inputType(SaveTypeInstanceRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code getTypeInstance} tool — returns a single stored record instance by UUID.
+     */
+    @Bean
+    @ToolCategory("Schema & Types")
+    public ToolCallback getTypeInstance() {
+        return FunctionToolCallback
+                .builder("getTypeInstance", (GetTypeInstanceRequest req) -> {
+                    try {
+                        Class<?> clazz = typeClassLoader.loadClass(req.fqn());
+                        Object entity = typeDatabaseService.get(clazz, req.uuid());
+                        if (entity == null) {
+                            return "{\"status\":\"not_found\",\"message\":\"Record not found for uuid: "
+                                    + req.uuid().replace("\"", "'") + "\"}";
+                        }
+                        return objectMapper.writeValueAsString(entity);
+                    } catch (ClassNotFoundException e) {
+                        return "{\"status\":\"error\",\"message\":\"Type not found: " + req.fqn() + "\"}";
+                    } catch (Exception e) {
+                        return "{\"status\":\"error\",\"message\":\"" + e.getMessage().replace("\"", "'") + "\"}";
+                    }
+                })
+                .description(
+                        """
+                                Fetch a single stored record instance by fully-qualified class name and uuid.
+                                """
+                                .stripIndent())
+                .inputType(GetTypeInstanceRequest.class)
                 .build();
     }
 
@@ -1468,10 +1524,48 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                List all stored instances of a custom Java type by its fully-qualified class name. Supports pagination via page (default 0) and pageSize (default 20).
+                                List stored record instances by fully-qualified class name. Supports pagination via page (default 0) and pageSize (default 20).
                                 """
                                 .stripIndent())
                 .inputType(ListTypeInstancesRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code countTypeInstances} tool — counts stored record instances, optionally filtered.
+     */
+    @Bean
+    @ToolCategory("Schema & Types")
+    public ToolCallback countTypeInstances() {
+        return FunctionToolCallback
+                .builder("countTypeInstances", (CountTypeInstancesRequest req) -> {
+                    try {
+                        Class<?> clazz = typeClassLoader.loadClass(req.fqn());
+                        String query = req.query();
+                        if (query == null || query.isBlank()) {
+                            return "{\"count\":" + typeDatabaseService.count(clazz) + "}";
+                        }
+                        String queryType = req.queryType() == null ? "SQL" : req.queryType().toUpperCase(Locale.ROOT);
+                        long count = "MONGO".equals(queryType)
+                                ? typeDatabaseService.searchCountByMongoFilter(clazz, query)
+                                : typeDatabaseService.searchCountBySql(clazz, query);
+                        return "{\"count\":" + count + "}";
+                    } catch (ClassNotFoundException e) {
+                        return "{\"status\":\"error\",\"message\":\"Type not found: " + req.fqn() + "\"}";
+                    } catch (SqlParseException e) {
+                        return "{\"status\":\"error\",\"message\":\"SQL parse error: "
+                                + e.getMessage().replace("\"", "'") + "\"}";
+                    } catch (Exception e) {
+                        return "{\"status\":\"error\",\"message\":\""
+                                + e.getMessage().replace("\"", "'") + "\"}";
+                    }
+                })
+                .description(
+                        """
+                                Count stored record instances for a class. Optionally provide a SQL or Mongo filter query to count matching records only.
+                                """
+                                .stripIndent())
+                .inputType(CountTypeInstancesRequest.class)
                 .build();
     }
 
@@ -1529,7 +1623,7 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                Delete a stored instance of a custom Java type by its UUID. Requires the fully-qualified class name and the instance UUID.
+                                Delete a stored record instance by UUID. Requires the fully-qualified class name and the instance UUID.
                                 """
                                 .stripIndent())
                 .inputType(DeleteTypeInstanceRequest.class)
@@ -1590,7 +1684,7 @@ REASONING_HINT: Authorization is required to compile {{type_name}}.
                 })
                 .description(
                         """
-                                Search instances of a custom Java type using either a SQL-like WHERE clause (queryType: SQL, default) or a raw MongoDB JSON filter (queryType: MONGO). SQL examples: "name = 'Alice'", "age > 18 AND active = true", "address.city = 'London'", "status IN ('active', 'pending')", "name LIKE '%ali%'". MONGO example: {"status":"active","age":{"$gt":18}}. Supports pagination (page, pageSize) and sorting (sortField, sortOrder).
+                                Search stored record instances using either a SQL-like WHERE clause (queryType: SQL, default) or a raw MongoDB JSON filter (queryType: MONGO). SQL examples: "name = 'Alice'", "age > 18 AND active = true", "address.city = 'London'", "status IN ('active', 'pending')", "name LIKE '%ali%'". MONGO example: {"status":"active","age":{"$gt":18}}. Supports pagination (page, pageSize) and sorting (sortField, sortOrder).
                                 """
                                 .stripIndent())
                 .inputType(SearchTypeInstancesRequest.class)

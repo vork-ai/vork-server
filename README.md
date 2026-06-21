@@ -178,25 +178,20 @@ If you want to run the latest code or make changes, build locally instead.
 ### Repository layout
 
 ```
-vork/
-├── jadaptive-orm/        ← generic MongoDB repository library (local dependency)
-└── vork-prototype/       ← the application (this repository)
-    ├── Dockerfile
-    ├── docker-compose.yml
-    └── src/
+vork-server/
+├── Dockerfile
+├── docker-compose.yml
+└── src/
 ```
-
-`jadaptive-orm` must be checked out as a sibling of `vork-prototype` — the Dockerfile build context is the parent directory so both modules are in scope.
 
 ### Clone and build
 
 ```bash
-# Clone both repos side by side
-git clone https://github.com/ludup/jadaptive-orm.git
-git clone https://github.com/ludup/vork-prototype.git
+# Clone the repo
+git clone https://github.com/ludup/vork-server.git
 
-# Start from the vork-prototype directory
-cd vork-prototype
+# Start from the vork-server directory
+cd vork-server
 docker compose up --build
 ```
 
@@ -300,7 +295,7 @@ The agent can only use tools that have been wired into its configuration. Sensit
 Run locally without Docker using a JDK 25 and a local MongoDB instance:
 
 ```bash
-# From the vork-prototype directory
+# From the vork-server directory
 mvn spring-boot:run
 ```
 

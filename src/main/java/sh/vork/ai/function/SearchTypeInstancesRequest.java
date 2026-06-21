@@ -19,7 +19,7 @@ import com.fasterxml.jackson.annotation.JsonPropertyDescription;
 public record SearchTypeInstancesRequest(
 
         @JsonProperty(required = true, value = "fqn")
-        @JsonPropertyDescription("Fully-qualified class name of the type to search, "
+        @JsonPropertyDescription("Fully-qualified class name of the record schema to search, "
                 + "e.g. sh.vork.generated.Product")
         String fqn,
 

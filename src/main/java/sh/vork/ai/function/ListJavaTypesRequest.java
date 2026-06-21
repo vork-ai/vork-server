@@ -6,5 +6,6 @@ package sh.vork.ai.function;
  * <p>This tool takes no arguments — the record is empty and exists solely to
  * satisfy the Spring AI {@code FunctionToolCallback} API which requires an
  * explicit input type.
+ * The returned list is best interpreted as compiled record/enum schemas.
  */
 public record ListJavaTypesRequest() {}
