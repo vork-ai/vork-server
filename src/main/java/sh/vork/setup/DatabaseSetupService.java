@@ -52,12 +52,12 @@ public class DatabaseSetupService {
 
     /**
      * Returns the currently persisted settings, or defaults targeting a local
-     * open MongoDB instance when the file is absent or incomplete.
+     * embedded Nitrite instance when the file is absent or incomplete.
      */
     public DatabaseSettings getCurrentSettings() {
         log.debug("ENTER getCurrentSettings");
         Properties props = loadPropertiesFile();
-        String backend = props.getProperty("db.backend", "mongo");
+        String backend = props.getProperty("db.backend", "nitrite");
 
         DatabaseSettings result = switch (backend) {
             case "redis" -> new DatabaseSettings(
@@ -84,10 +84,10 @@ public class DatabaseSetupService {
 
     /**
      * Returns the {@code db.backend} value from the properties file,
-     * defaulting to {@code "mongo"} when the file is absent.
+     * defaulting to {@code "nitrite"} when the file is absent.
      */
     public String getCurrentBackend() {
-        return loadPropertiesFile().getProperty("db.backend", "mongo");
+        return loadPropertiesFile().getProperty("db.backend", "nitrite");
     }
 
     // -------------------------------------------------------------------------

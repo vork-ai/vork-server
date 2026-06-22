@@ -28,7 +28,7 @@ import org.springframework.stereotype.Component;
  * automatically by matching the generic type parameter.
  */
 @Component
-@ConditionalOnProperty(name = "db.backend", havingValue = "mongo", matchIfMissing = true)
+@ConditionalOnProperty(name = "db.backend", havingValue = "mongo")
 public class MongoRepositoryFactory implements RepositoryFactory {
 
     private final MongoDatabase mongoDatabase;

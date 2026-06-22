@@ -23,7 +23,7 @@ import java.nio.file.Path;
  * (default: {@code conf.d/vork.db}).
  */
 @Configuration
-@ConditionalOnProperty(name = "db.backend", havingValue = "nitrite")
+@ConditionalOnProperty(name = "db.backend", havingValue = "nitrite", matchIfMissing = true)
 public class NitriteConfig {
 
     private static final Logger log = LoggerFactory.getLogger(NitriteConfig.class);

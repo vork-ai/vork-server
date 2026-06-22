@@ -19,10 +19,10 @@ import java.util.List;
  * (relative to the working directory at startup) and exposes the necessary
  * Spring beans.
  *
- * <p>Active when {@code db.backend=mongo} (the default when no value is set).
+ * <p>Active only when {@code db.backend=mongo}.
  */
 @Configuration
-@ConditionalOnProperty(name = "db.backend", havingValue = "mongo", matchIfMissing = true)
+@ConditionalOnProperty(name = "db.backend", havingValue = "mongo")
 public class MongoConfig {
 
     @Value("${mongo.host:localhost}")

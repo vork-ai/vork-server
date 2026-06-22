@@ -2,6 +2,7 @@ package sh.vork.setup;
 
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -161,11 +162,10 @@ public class SetupController {
 
             boolean restartRequired;
             if (!previouslyConfigured) {
-                // Fresh install: MongoConfig loaded via matchIfMissing=true with defaults.
+                // Fresh install: Nitrite backend is active by default (matchIfMissing=true).
                 // Restart only if the user's settings differ from those defaults.
-                restartRequired = !"mongo".equals(req.backend())
-                        || !req.host().equals(previousSettings.host())
-                        || req.port() != previousSettings.port();
+                restartRequired = !"nitrite".equals(req.backend())
+                    || !Objects.equals(settings.database(), previousSettings.database());
             } else {
                 // Re-configure: restart only when the active backend is changing.
                 restartRequired = !previousBackend.equals(req.backend());

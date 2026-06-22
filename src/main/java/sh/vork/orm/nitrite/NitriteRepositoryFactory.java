@@ -14,7 +14,7 @@ import sh.vork.orm.RepositoryFactory;
  * <p>Active only when {@code db.backend=nitrite}.
  */
 @Component
-@ConditionalOnProperty(name = "db.backend", havingValue = "nitrite")
+@ConditionalOnProperty(name = "db.backend", havingValue = "nitrite", matchIfMissing = true)
 public class NitriteRepositoryFactory implements RepositoryFactory {
 
     private final Nitrite       nitriteDb;
