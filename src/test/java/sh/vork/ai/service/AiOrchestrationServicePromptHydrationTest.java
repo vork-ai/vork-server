@@ -1,6 +1,7 @@
 package sh.vork.ai.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -8,6 +9,7 @@ import static org.mockito.Mockito.when;
 import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.junit.jupiter.api.AfterEach;
@@ -20,7 +22,10 @@ import sh.vork.ai.AiProvider;
 import sh.vork.ai.config.AiConfig;
 import sh.vork.ai.context.ToolExecutionContext;
 import sh.vork.ai.entity.AiSession;
+import sh.vork.ai.entity.AiSessionStatus;
+import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.memory.SessionEnvironmentService;
+import sh.vork.skill.SkillFrame;
 
 class AiOrchestrationServicePromptHydrationTest {
 
@@ -120,6 +125,71 @@ class AiOrchestrationServicePromptHydrationTest {
         assertEquals(expected, prompt);
         verify(envService).getEnv("session-3");
     }
+
+        @Test
+        void composeSystemPrompt_whenInSkillFrame_stillIncludesEnvironmentVariablesBlock() throws Exception {
+        LinkedHashMap<String, String> env = new LinkedHashMap<>();
+        env.put("active_target_alias", "db-main");
+
+        SessionEnvironmentService envService = mock(SessionEnvironmentService.class);
+        when(envService.getEnv("session-skill-1")).thenReturn(env);
+
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<AiSession> sessionRepo = mock(DatabaseRepository.class);
+        AiSession session = new AiSession(
+            "session-skill-1",
+            "GEMINI",
+            SessionOriginMode.WEB,
+            "tester",
+            "Skill Session",
+            System.currentTimeMillis(),
+            0,
+            List.of(),
+            Map.of(),
+            AiSessionStatus.RUNNING,
+            null,
+            null,
+            List.of(new SkillFrame(
+                "skill-1",
+                "Skill One",
+                "Do the task",
+                "",
+                List.of(),
+                List.of(),
+                Map.of(),
+                0)),
+            List.of(),
+            List.of());
+        when(sessionRepo.get("session-skill-1")).thenReturn(session);
+
+        @SuppressWarnings("unchecked")
+        DatabaseRepository<sh.vork.skill.Skill> skillRepo = mock(DatabaseRepository.class);
+        when(skillRepo.get("skill-1")).thenReturn(null);
+
+        @SuppressWarnings("unchecked")
+        AiOrchestrationService service = new AiOrchestrationService(
+            Map.of(AiProvider.GEMINI, mock(ChatClient.class)),
+            null,
+            envService,
+            sessionRepo,
+            mock(DatabaseRepository.class),
+            skillRepo,
+            Map.of(),
+            null,
+            null,
+            null,
+            null,
+            null,
+            null,
+            null);
+        ToolExecutionContext.bindSessionUuid("session-skill-1");
+
+        String prompt = invokeComposeSystemPrompt(service);
+
+        assertTrue(prompt.contains("### ACTIVE SESSION ENVIRONMENT VARIABLES"));
+        assertTrue(prompt.contains("active_target_alias=db-main"));
+        verify(envService).getEnv("session-skill-1");
+        }
 
     private static String invokeComposeSystemPrompt(AiOrchestrationService service) throws Exception {
         Method compose = AiOrchestrationService.class.getDeclaredMethod("composeSystemPrompt");

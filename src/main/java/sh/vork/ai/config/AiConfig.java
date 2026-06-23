@@ -23,7 +23,6 @@ import org.springframework.ai.chat.model.ToolContext;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.definition.ToolDefinition;
-import org.springframework.ai.tool.definition.DefaultToolDefinition;
 import org.springframework.ai.tool.function.FunctionToolCallback;
 import org.springframework.beans.factory.config.BeanDefinition;
 import org.springframework.beans.factory.config.ConfigurableListableBeanFactory;
@@ -45,19 +44,24 @@ import sh.vork.ai.entity.AiSessionStatus;
 import sh.vork.ai.entity.SessionOriginMode;
 import sh.vork.ai.memory.SessionEnvironmentService;
 import sh.vork.ai.function.CompileTypeRequest;
+import sh.vork.ai.function.CreateMongoDbConnectionRequest;
 import sh.vork.ai.function.DeleteSshConnectionRequest;
+import sh.vork.ai.function.DeleteMongoDbDocumentsRequest;
 import sh.vork.ai.function.DeleteTypeInstanceRequest;
 import sh.vork.ai.function.DisconnectSshRequest;
 import sh.vork.ai.function.DownloadFileRequest;
 import sh.vork.ai.function.ExecuteTerminalCommandRequest;
 import sh.vork.ai.function.GetDateTimeRequest;
+import sh.vork.ai.function.GetMongoDbCollectionSchemaRequest;
 import sh.vork.ai.function.GetTypeInstanceRequest;
 import sh.vork.ai.function.GetTypeSchemaRequest;
 import sh.vork.ai.function.HttpRequestToolRequest;
+import sh.vork.ai.function.InsertMongoDbDocumentRequest;
 import sh.vork.ai.function.ListAgentTemplatesRequest;
 import sh.vork.ai.function.ListAvailableToolsRequest;
 import sh.vork.ai.function.ListEnumValuesRequest;
 import sh.vork.ai.function.ListJavaTypesRequest;
+import sh.vork.ai.function.ListMongoDbCollectionsRequest;
 import sh.vork.ai.function.ListNotificationProvidersRequest;
 import sh.vork.ai.function.ListSshConnectionsRequest;
 import sh.vork.ai.function.ListTypeInstancesRequest;
@@ -66,13 +70,16 @@ import sh.vork.ai.function.OAuthConnectRequest;
 import sh.vork.ai.function.OAuthResetRequest;
 import sh.vork.ai.function.CountTypeInstancesRequest;
 import sh.vork.ai.function.SaveTypeInstanceRequest;
+import sh.vork.ai.function.SearchMongoDbDocumentsRequest;
 import sh.vork.ai.function.SearchTypeInstancesRequest;
 import sh.vork.ai.function.SendNotificationRequest;
 import sh.vork.ai.function.SetSshAliasRequest;
 import sh.vork.ai.function.SshConnectRequest;
 import sh.vork.ai.function.SshCreateConnectionRequest;
+import sh.vork.ai.function.UpdateMongoDbDocumentsRequest;
 import sh.vork.ai.function.UploadFileRequest;
 import sh.vork.ai.function.UploadTextFileRequest;
+import sh.vork.ai.mongo.MongoToolService;
 import sh.vork.ai.registry.Hidden;
 import sh.vork.ai.registry.ToolCategory;
 import sh.vork.ai.registry.ToolDepends;
@@ -89,6 +96,7 @@ import sh.vork.ai.protocol.interaction.FormField;
 import sh.vork.ai.protocol.interaction.InteractionFormSchema;
 import sh.vork.ai.tool.CompleteBackgroundTaskRequest;
 import sh.vork.ai.tool.CompleteSkillExecutionRequest;
+import sh.vork.ai.tool.MemoryRequest;
 import sh.vork.ai.tool.RecordProgressRequest;
 import sh.vork.ai.tool.ThinkRequest;
 import sh.vork.ai.protocol.UiEventFrame;
@@ -176,6 +184,14 @@ CRITICAL PROCESSING PROTOCOL (HIGHEST PRIORITY):
     - Keep entries concise and factual.
     - `recordProgress` is persistent session memory, not a final action; continue
     execution after recording progress.
+
+3c. THE "memory" TOOL RULES:
+    - Use `memory` to store stable key=value context you must reuse in later turns
+    (e.g., active_target_alias, selected_profile, ticket_id).
+    - Use `memory` with operation=set to persist a value, operation=get/list to
+    retrieve values, and operation=delete to remove stale values.
+    - Keys and values are injected into future system prompts as session environment
+    variables, so keep them concise and machine-readable.
 
 4. TURN COMPLETION (FINISHED_TURN):
    - You may only return the final JSON payload with status "FINISHED_TURN" 
@@ -597,6 +613,99 @@ the protocol and will break the system. Do not converse. Execute.
                 .description("Persist a concise progress checkpoint to session memory for use in later turns. "
                         + "Use this after completing significant steps (e.g. host scanned, report generated, report sent).")
                 .inputType(RecordProgressRequest.class)
+                .build();
+    }
+
+    /**
+     * Global meta-tool for generic key/value session memory.
+     *
+     * <p>Values are persisted to session environment variables and are injected
+     * into subsequent system prompts.
+     */
+    @Bean("memory")
+    @Hidden
+    @ToolCategory("Meta")
+    public ToolCallback memory(SessionEnvironmentService sessionEnvironmentService) {
+        return FunctionToolCallback
+                .builder("memory", (MemoryRequest req) -> {
+                    String sessionUuid = resolveSessionUuid();
+                    if (sessionUuid == null || sessionUuid.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"No session bound\"}";
+                    }
+
+                    String operation = req.operation() == null ? "set" : req.operation().trim().toLowerCase(Locale.ROOT);
+                    Map<String, String> env = sessionEnvironmentService.getEnv(sessionUuid);
+
+                    switch (operation) {
+                        case "set" -> {
+                            String key = req.key() == null ? "" : req.key().trim();
+                            if (key.isBlank()) {
+                                return "{\"status\":\"error\",\"message\":\"key is required for set\"}";
+                            }
+                            String value = req.value() == null ? "" : req.value();
+                            sessionEnvironmentService.setEnv(sessionUuid, key, value);
+                            ToolExecutionContext.put(key, value);
+                            log.debug("AI memory set [session={}, key={}, value={}]", sessionUuid, key, value);
+                            return "{\"status\":\"ok\",\"operation\":\"set\",\"key\":\"" + key + "\"}";
+                        }
+                        case "get" -> {
+                            String key = req.key() == null ? "" : req.key().trim();
+                            if (key.isBlank()) {
+                                return "{\"status\":\"error\",\"message\":\"key is required for get\"}";
+                            }
+                            String value = env.get(key);
+                            try {
+                                return objectMapper.writeValueAsString(Map.of(
+                                        "status", "ok",
+                                        "operation", "get",
+                                        "key", key,
+                                        "value", value == null ? "" : value,
+                                        "found", value != null));
+                            } catch (Exception e) {
+                                log.warn("memory get serialization failed [session={}, key={}]", sessionUuid, key, e);
+                                return "{\"status\":\"error\",\"message\":\"Unable to serialize memory response\"}";
+                            }
+                        }
+                        case "list" -> {
+                            String prefix = req.prefix() == null ? "" : req.prefix();
+                            Map<String, String> filtered = new java.util.TreeMap<>();
+                            if (env != null) {
+                                env.forEach((k, v) -> {
+                                    if (prefix.isBlank() || k.startsWith(prefix)) {
+                                        filtered.put(k, v);
+                                    }
+                                });
+                            }
+                            try {
+                                return objectMapper.writeValueAsString(Map.of(
+                                        "status", "ok",
+                                        "operation", "list",
+                                        "prefix", prefix,
+                                        "count", filtered.size(),
+                                        "entries", filtered));
+                            } catch (Exception e) {
+                                log.warn("memory list serialization failed [session={}, prefix={}]", sessionUuid, prefix, e);
+                                return "{\"status\":\"error\",\"message\":\"Unable to serialize memory response\"}";
+                            }
+                        }
+                        case "delete" -> {
+                            String key = req.key() == null ? "" : req.key().trim();
+                            if (key.isBlank()) {
+                                return "{\"status\":\"error\",\"message\":\"key is required for delete\"}";
+                            }
+                            boolean existed = env != null && env.containsKey(key);
+                            sessionEnvironmentService.deleteEnv(sessionUuid, key);
+                            log.debug("AI memory delete [session={}, key={}, existed={}]", sessionUuid, key, existed);
+                            return "{\"status\":\"ok\",\"operation\":\"delete\",\"key\":\""
+                                    + key + "\",\"deleted\":" + existed + "}";
+                        }
+                        default -> {
+                            return "{\"status\":\"error\",\"message\":\"Unsupported operation. Use set|get|list|delete\"}";
+                        }
+                    }
+                })
+                .description("Session key/value memory store. Use operation=set|get|list|delete to manage reusable context that is injected into future system prompts.")
+                .inputType(MemoryRequest.class)
                 .build();
     }
 
@@ -1264,6 +1373,288 @@ the protocol and will break the system. Do not converse. Execute.
                     """.stripIndent())
                 .inputType(HttpRequestToolRequest.class)
                 .build();
+    }
+
+    /**
+     * {@code createMongoDBConnection} tool — stores and validates a MongoDB
+     * connection profile for the authenticated user.
+     */
+    @Bean
+    @Restricted
+    @ToolCategory("Data & Integrations")
+    public ToolCallback createMongoDBConnection(MongoToolService mongoToolService) {
+        ToolCallback delegate = FunctionToolCallback
+                .builder("createMongoDBConnection", (CreateMongoDbConnectionRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+
+                    CreateMongoDbConnectionRequest effectiveReq = req != null
+                            ? req
+                            : new CreateMongoDbConnectionRequest(null, null, null, null, null, null, null, null, null);
+
+                    if (needsMongoConnectionInput(effectiveReq)) {
+                        throw new ToolSuspensionException(
+                                "createMongoDBConnection",
+                                safeJson(effectiveReq),
+                                "MongoDB connection details are required before saving credentials.",
+                                mongoConnectionInputForm(effectiveReq));
+                    }
+
+                    return mongoToolService.createConnection(username, effectiveReq);
+                })
+                .description(
+                        """
+                        Create and save a user-scoped MongoDB connection profile for generic CRM/data access tools.
+                        Credentials are stored in encrypted user secrets and never need to be repeated after setup.
+                        This tool validates connectivity with a ping before saving.
+                        Credentials are always collected via a secure user form and should never be passed directly in tool arguments.
+                        If required fields are missing, this tool suspends and requests host, port, database, and credentials via a secure form.
+                        Use connectionName to save multiple profiles (defaults to 'default').
+                        REASONING_HINT: Authorization is required to save MongoDB connection '{{connectionName}}'.
+                        """.stripIndent())
+                .inputType(CreateMongoDbConnectionRequest.class)
+                .build();
+        return new VisualizableToolCallback(delegate, argsJson -> {
+            try {
+                var node = objectMapper.readTree(argsJson);
+                String name = node.path("connectionName").asText("default");
+                String db = node.path("database").asText("");
+                return "Create MongoDB connection profile: " + name + (db.isBlank() ? "" : " (db=" + db + ")");
+            } catch (Exception ex) {
+                return "Create MongoDB connection profile";
+            }
+        });
+    }
+
+    private static boolean needsMongoConnectionInput(CreateMongoDbConnectionRequest req) {
+        if (req == null) {
+            return true;
+        }
+        if (!Boolean.TRUE.equals(req.credentialPromptComplete())) {
+            return true;
+        }
+        boolean hasConnectionString = req.connectionString() != null && !req.connectionString().isBlank();
+        if (hasConnectionString) {
+            return false;
+        }
+        return req.host() == null || req.host().isBlank()
+            || req.database() == null || req.database().isBlank();
+    }
+
+    private static InteractionFormSchema mongoConnectionInputForm(CreateMongoDbConnectionRequest req) {
+        String connectionName = req.connectionName() != null && !req.connectionName().isBlank()
+            ? req.connectionName() : "default";
+        String host = req.host() != null && !req.host().isBlank() ? req.host() : "localhost";
+        String port = String.valueOf(req.port() != null && req.port() > 0 ? req.port() : 27017);
+        String database = req.database() != null && !req.database().isBlank() ? req.database() : "";
+        String authDatabase = req.authDatabase() != null && !req.authDatabase().isBlank() ? req.authDatabase() : "admin";
+        String username = req.username() != null ? req.username() : "";
+
+        return new InteractionFormSchema(
+            "COLLECT_MONGODB_CONNECTION_INPUT",
+            "MongoDB Connection Required",
+            "Provide MongoDB connection details. You can use either a full connectionString or host/port/database fields.",
+            List.of(
+                new FormField("connectionName", "TEXT", "Connection Name", "default", connectionName, true, FieldSource.CONTEXT, null),
+                new FormField("connectionString", "TEXT", "connectionString (optional)",
+                    "mongodb://user:pass@host:27017/database", req.connectionString(), false, FieldSource.CONTEXT, null),
+                new FormField("host", "TEXT", "Host", "localhost", host, false, FieldSource.CONTEXT, null),
+                new FormField("port", "NUMBER", "Port", "27017", port, false, FieldSource.CONTEXT, null),
+                new FormField("database", "TEXT", "Database", "crm", database, false, FieldSource.CONTEXT, null),
+                new FormField("authDatabase", "TEXT", "Auth Database", "admin", authDatabase, false, FieldSource.CONTEXT, null),
+                new FormField("username", "TEXT", "Username", "mongodb-user", username, false, FieldSource.SECRET, null),
+                new FormField("password", "PASSWORD", "Password", "MongoDB password", null, false, FieldSource.SECRET, null),
+                new FormField("credentialPromptComplete", "HIDDEN", "credentialPromptComplete", "true", "true", false, FieldSource.CONTEXT, null)
+            ),
+            List.of(
+                new FormAction("ONCE", "Save & Continue", "primary"),
+                new FormAction("DENIED", "Cancel", "danger")
+            )
+        );
+    }
+
+    /**
+     * {@code listMongoDBCollections} tool — lists collections for a saved MongoDB
+     * connection profile.
+     */
+    @Bean
+    @ToolCategory("Data & Integrations")
+    @ToolDepends({"createMongoDBConnection"})
+    public ToolCallback listMongoDBCollections(MongoToolService mongoToolService) {
+        return FunctionToolCallback
+                .builder("listMongoDBCollections", (ListMongoDbCollectionsRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+                    return mongoToolService.listCollections(username, req);
+                })
+                .description(
+                        """
+                        List collections in a MongoDB database using a previously saved connection profile.
+                        Read-only and unrestricted.
+                        """.stripIndent())
+                .inputType(ListMongoDbCollectionsRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code getMongoDBCollectionSchema} tool — infers schema hints by sampling
+     * documents from a resolved collection.
+     */
+    @Bean
+    @ToolCategory("Data & Integrations")
+    @ToolDepends({"createMongoDBConnection", "listMongoDBCollections"})
+    public ToolCallback getMongoDBCollectionSchema(MongoToolService mongoToolService) {
+        return FunctionToolCallback
+                .builder("getMongoDBCollectionSchema", (GetMongoDbCollectionSchemaRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+                    return mongoToolService.getCollectionSchema(username, req);
+                })
+                .description(
+                        """
+                        Infer a collection schema by sampling documents.
+                        The tool can resolve collection name from natural language query context when collection is omitted.
+                        Read-only and unrestricted.
+                        """.stripIndent())
+                .inputType(GetMongoDbCollectionSchemaRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code searchMongoDBDocuments} tool — generic read/search against external
+     * MongoDB collections.
+     */
+    @Bean
+    @ToolCategory("Data & Integrations")
+    @ToolDepends({"createMongoDBConnection", "listMongoDBCollections"})
+    public ToolCallback searchMongoDBDocuments(MongoToolService mongoToolService) {
+        return FunctionToolCallback
+                .builder("searchMongoDBDocuments", (SearchMongoDbDocumentsRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+                    return mongoToolService.searchDocuments(username, req);
+                })
+                .description(
+                        """
+                        Search/read MongoDB documents using either raw filterJson or natural language query.
+                        When filterJson is omitted, query is used to build a fuzzy text filter and resolve collection names.
+                        Supports pagination and sorting.
+                        Read-only and unrestricted.
+                        """.stripIndent())
+                .inputType(SearchMongoDbDocumentsRequest.class)
+                .build();
+    }
+
+    /**
+     * {@code insertMongoDBDocument} tool — insert one JSON document into a
+     * collection.
+     */
+    @Bean
+    @Restricted
+    @ToolCategory("Data & Integrations")
+    @ToolDepends({"createMongoDBConnection"})
+    public ToolCallback insertMongoDBDocument(MongoToolService mongoToolService) {
+        ToolCallback delegate = FunctionToolCallback
+                .builder("insertMongoDBDocument", (InsertMongoDbDocumentRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+                    return mongoToolService.insertDocument(username, req);
+                })
+                .description(
+                        """
+                        Insert a document into a MongoDB collection for a saved connection profile.
+                        This is a write operation and requires authorization.
+                        REASONING_HINT: Authorization is required to insert data into '{{collection}}'.
+                        """.stripIndent())
+                .inputType(InsertMongoDbDocumentRequest.class)
+                .build();
+        return new VisualizableToolCallback(delegate, argsJson -> {
+            try {
+                var node = objectMapper.readTree(argsJson);
+                return "Insert MongoDB document into collection: " + node.path("collection").asText("(unknown)");
+            } catch (Exception ex) {
+                return "Insert MongoDB document";
+            }
+        });
+    }
+
+    /**
+     * {@code updateMongoDBDocuments} tool — update one or many documents.
+     */
+    @Bean
+    @Restricted
+    @ToolCategory("Data & Integrations")
+    @ToolDepends({"createMongoDBConnection", "listMongoDBCollections"})
+    public ToolCallback updateMongoDBDocuments(MongoToolService mongoToolService) {
+        ToolCallback delegate = FunctionToolCallback
+                .builder("updateMongoDBDocuments", (UpdateMongoDbDocumentsRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+                    return mongoToolService.updateDocuments(username, req);
+                })
+                .description(
+                        """
+                        Update MongoDB documents using raw filterJson or natural language query.
+                        updateJson must be a MongoDB update document (for example with $set).
+                        This is a write operation and requires authorization.
+                        REASONING_HINT: Authorization is required to update MongoDB collection '{{collection}}'.
+                        """.stripIndent())
+                .inputType(UpdateMongoDbDocumentsRequest.class)
+                .build();
+        return new VisualizableToolCallback(delegate, argsJson -> {
+            try {
+                var node = objectMapper.readTree(argsJson);
+                return "Update MongoDB documents in collection: " + node.path("collection").asText("(resolved from query)");
+            } catch (Exception ex) {
+                return "Update MongoDB documents";
+            }
+        });
+    }
+
+    /**
+     * {@code deleteMongoDBDocuments} tool — delete one or many documents.
+     */
+    @Bean
+    @Restricted
+    @ToolCategory("Data & Integrations")
+    @ToolDepends({"createMongoDBConnection", "listMongoDBCollections"})
+    public ToolCallback deleteMongoDBDocuments(MongoToolService mongoToolService) {
+        ToolCallback delegate = FunctionToolCallback
+                .builder("deleteMongoDBDocuments", (DeleteMongoDbDocumentsRequest req) -> {
+                    String username = resolveUsername();
+                    if (username == null || username.isBlank()) {
+                        return "{\"status\":\"error\",\"message\":\"Authenticated user is required\"}";
+                    }
+                    return mongoToolService.deleteDocuments(username, req);
+                })
+                .description(
+                        """
+                        Delete MongoDB documents using raw filterJson or natural language query.
+                        This is a write operation and requires authorization.
+                        REASONING_HINT: Authorization is required to delete records from '{{collection}}'.
+                        """.stripIndent())
+                .inputType(DeleteMongoDbDocumentsRequest.class)
+                .build();
+        return new VisualizableToolCallback(delegate, argsJson -> {
+            try {
+                var node = objectMapper.readTree(argsJson);
+                return "Delete MongoDB documents from collection: " + node.path("collection").asText("(resolved from query)");
+            } catch (Exception ex) {
+                return "Delete MongoDB documents";
+            }
+        });
     }
 
     /**

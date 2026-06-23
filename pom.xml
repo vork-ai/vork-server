@@ -120,6 +120,14 @@
             <artifactId>mongodb-driver-sync</artifactId>
         </dependency>
 
+        <!-- Couchbase Java SDK -->
+        <dependency>
+            <groupId>com.couchbase.client</groupId>
+            <artifactId>java-client</artifactId>
+            <version>3.7.8</version>
+            <optional>true</optional>
+        </dependency>
+
         <!-- Jackson: JSON serialisation of Java records -->
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>

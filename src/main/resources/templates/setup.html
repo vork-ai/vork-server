@@ -58,6 +58,11 @@
             grid-template-columns: repeat(4, 1fr);
             gap: 0.5rem;
         }
+        .db-provider-grid {
+            display: grid;
+            grid-template-columns: repeat(4, 1fr);
+            gap: 0.5rem;
+        }
     </style>
 </head>
 <body class="bg-zinc-950 text-zinc-100">
@@ -96,29 +101,36 @@
                         <i class="fa-solid fa-database me-2 text-primary"></i>Database
                     </h5>
                     <p class="text-muted small mb-4">
-                        Choose where Vork stores its data. Defaults connect to a local, open database.
+                        Choose where Vork stores its data. Nitrite is the default for first-run setup.
                     </p>
 
                     <!-- Backend selection -->
                     <label class="form-label">Backend</label>
-                    <div class="provider-grid mb-3">
-                        <div class="card provider-btn text-center p-2 rounded selected" id="db-btn-mongo" onclick="selectDbBackend('mongo')">
-                            <i class="fa-solid fa-leaf fa-lg mb-1 text-success"></i>
-                            <div class="fw-semibold small">MongoDB</div>
-                        </div>
-                        <div class="card provider-btn text-center p-2 rounded" id="db-btn-redis" onclick="selectDbBackend('redis')">
-                            <i class="fa-solid fa-server fa-lg mb-1 text-danger"></i>
-                            <div class="fw-semibold small">Redis</div>
-                        </div>
-                        <div class="card provider-btn text-center p-2 rounded" id="db-btn-nitrite" onclick="selectDbBackend('nitrite')">
+                    <div class="db-provider-grid mb-3">
+                        <div class="card provider-btn text-center p-2 rounded selected" id="db-btn-nitrite" onclick="selectDbBackend('nitrite')">
                             <i class="fa-solid fa-hard-drive fa-lg mb-1 text-warning"></i>
                             <div class="fw-semibold small">Nitrite</div>
                             <div class="text-muted" style="font-size:0.7rem">Embedded</div>
                         </div>
+                        <div class="card provider-btn text-center p-2 rounded" id="db-btn-mongo" onclick="selectDbBackend('mongo')">
+                            <i class="fa-solid fa-leaf fa-lg mb-1 text-success"></i>
+                            <div class="fw-semibold small">MongoDB</div>
+                            <div class="text-muted" style="font-size:0.7rem">Document Store</div>
+                        </div>
+                        <div class="card provider-btn text-center p-2 rounded" id="db-btn-redis" onclick="selectDbBackend('redis')">
+                            <i class="fa-solid fa-server fa-lg mb-1 text-danger"></i>
+                            <div class="fw-semibold small">Redis</div>
+                            <div class="text-muted" style="font-size:0.7rem">In-Memory + Persistence</div>
+                        </div>
+                        <div class="card provider-btn text-center p-2 rounded" id="db-btn-couchbase" onclick="selectDbBackend('couchbase')">
+                            <i class="fa-solid fa-cubes fa-lg mb-1 text-info"></i>
+                            <div class="fw-semibold small">Couchbase</div>
+                            <div class="text-muted" style="font-size:0.7rem">Distributed JSON</div>
+                        </div>
                     </div>
 
                     <!-- MongoDB fields -->
-                    <div id="db-mongo-fields">
+                    <div id="db-mongo-fields" class="d-none">
                         <div class="row g-2 mb-2">
                             <div class="col-8">
                                 <label class="form-label small" for="db-mongo-host">Host</label>
@@ -163,8 +175,36 @@
                         </div>
                     </div>
 
+                    <!-- Couchbase fields -->
+                    <div id="db-couchbase-fields" class="d-none">
+                        <div class="row g-2 mb-2">
+                            <div class="col-8">
+                                <label class="form-label small" for="db-couchbase-host">Host</label>
+                                <input type="text" id="db-couchbase-host" class="form-control form-control-sm" value="localhost">
+                            </div>
+                            <div class="col-4">
+                                <label class="form-label small" for="db-couchbase-port">Port</label>
+                                <input type="number" id="db-couchbase-port" class="form-control form-control-sm" value="8091">
+                            </div>
+                        </div>
+                        <div class="mb-2">
+                            <label class="form-label small" for="db-couchbase-bucket">Bucket</label>
+                            <input type="text" id="db-couchbase-bucket" class="form-control form-control-sm" value="vork">
+                        </div>
+                        <div class="row g-2 mb-2">
+                            <div class="col">
+                                <label class="form-label small" for="db-couchbase-username">Username</label>
+                                <input type="text" id="db-couchbase-username" class="form-control form-control-sm" value="Administrator" autocomplete="off">
+                            </div>
+                            <div class="col">
+                                <label class="form-label small" for="db-couchbase-password">Password</label>
+                                <input type="password" id="db-couchbase-password" class="form-control form-control-sm" autocomplete="new-password" value="password">
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- Nitrite (embedded) fields -->
-                    <div id="db-nitrite-fields" class="d-none">
+                    <div id="db-nitrite-fields">
                         <div class="mb-2">
                             <label class="form-label small" for="db-nitrite-path">Database File</label>
                             <input type="text" id="db-nitrite-path" class="form-control form-control-sm" value="conf.d/vork.db">
@@ -980,16 +1020,18 @@
 
     // ── Database step ─────────────────────────────────────────────────────────
 
-    let selectedDbBackend = 'mongo';
+    let selectedDbBackend = 'nitrite';
 
     function selectDbBackend(backend) {
         selectedDbBackend = backend;
         document.getElementById('db-btn-mongo').classList.toggle('selected', backend === 'mongo');
         document.getElementById('db-btn-redis').classList.toggle('selected', backend === 'redis');
         document.getElementById('db-btn-nitrite').classList.toggle('selected', backend === 'nitrite');
+        document.getElementById('db-btn-couchbase').classList.toggle('selected', backend === 'couchbase');
         document.getElementById('db-mongo-fields').classList.toggle('d-none', backend !== 'mongo');
         document.getElementById('db-redis-fields').classList.toggle('d-none', backend !== 'redis');
         document.getElementById('db-nitrite-fields').classList.toggle('d-none', backend !== 'nitrite');
+        document.getElementById('db-couchbase-fields').classList.toggle('d-none', backend !== 'couchbase');
     }
 
     function showDbAlert(msg, type) {
@@ -1007,6 +1049,13 @@
             host:     document.getElementById('db-redis-host').value.trim(),
             port:     parseInt(document.getElementById('db-redis-port').value, 10) || 6379,
             password: document.getElementById('db-redis-password').value
+        } : selectedDbBackend === 'couchbase' ? {
+            backend:   'couchbase',
+            host:      document.getElementById('db-couchbase-host').value.trim(),
+            port:      parseInt(document.getElementById('db-couchbase-port').value, 10) || 8091,
+            database:  document.getElementById('db-couchbase-bucket').value.trim() || 'vork',
+            username:  document.getElementById('db-couchbase-username').value.trim(),
+            password:  document.getElementById('db-couchbase-password').value
         } : selectedDbBackend === 'nitrite' ? {
             backend:  'nitrite',
             database: document.getElementById('db-nitrite-path').value.trim() || 'conf.d/vork.db'
@@ -1090,25 +1139,38 @@
     function prefillDbForm(s) {
         if (s.backend) selectDbBackend(s.backend);
         const isRedis   = s.backend === 'redis';
+        const isCouchbase = s.backend === 'couchbase';
         const isNitrite = s.backend === 'nitrite';
         if (isNitrite) {
             if (s.database) document.getElementById('db-nitrite-path').value = s.database;
             return;
         }
         if (s.host) {
-            const el = document.getElementById(isRedis ? 'db-redis-host' : 'db-mongo-host');
+            const hostId = isRedis
+                ? 'db-redis-host'
+                : isCouchbase
+                    ? 'db-couchbase-host'
+                    : 'db-mongo-host';
+            const el = document.getElementById(hostId);
             if (el) el.value = s.host;
         }
         if (s.port) {
-            const el = document.getElementById(isRedis ? 'db-redis-port' : 'db-mongo-port');
+            const portId = isRedis
+                ? 'db-redis-port'
+                : isCouchbase
+                    ? 'db-couchbase-port'
+                    : 'db-mongo-port';
+            const el = document.getElementById(portId);
             if (el) el.value = s.port;
         }
         if (!isRedis && s.database) {
-            const el = document.getElementById('db-mongo-database');
+            const dbId = isCouchbase ? 'db-couchbase-bucket' : 'db-mongo-database';
+            const el = document.getElementById(dbId);
             if (el) el.value = s.database;
         }
         if (!isRedis && s.username) {
-            const el = document.getElementById('db-mongo-username');
+            const userId = isCouchbase ? 'db-couchbase-username' : 'db-mongo-username';
+            const el = document.getElementById(userId);
             if (el) el.value = s.username;
         }
     }

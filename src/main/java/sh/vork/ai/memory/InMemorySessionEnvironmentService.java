@@ -23,6 +23,23 @@ public class InMemorySessionEnvironmentService implements SessionEnvironmentServ
     }
 
     @Override
+    public void deleteEnv(String sessionUuid, String key) {
+        if (sessionUuid == null || sessionUuid.isBlank() || key == null || key.isBlank()) {
+            return;
+        }
+
+        ConcurrentHashMap<String, String> env = store.get(sessionUuid);
+        if (env == null) {
+            return;
+        }
+
+        env.remove(key);
+        if (env.isEmpty()) {
+            store.remove(sessionUuid);
+        }
+    }
+
+    @Override
     public Map<String, String> getEnv(String sessionUuid) {
         if (sessionUuid == null || sessionUuid.isBlank()) {
             return Map.of();

@@ -89,6 +89,13 @@ and a retry with different instructions would help.
             high-level outcome.
 
             ### SYSTEM DISCOVERY & CREDENTIAL LIFECYCLE:
+            - Maintain the active target ssh conneciton using the 'memory' tool as `active_ssh_connection`. 
+            If the connection is lost, you must re-establish it using `connectSsh` before proceeding. If 
+            no connection is currently active, you must establish one before executing any commands.
+            - If the user gives you a command but does not specify a host and there is no active connection, 
+            assume the target is the local host and proceed with local execution.
+            - If the user instructs you to switch to a different host, connect and update the active
+            connection accordingly.
             - If you need to act on a node, check `listSshConnections` first to see if an active \
             session exists.
             - If a connection is missing, call `connectSsh`. Do not ask for credentials or attempt \

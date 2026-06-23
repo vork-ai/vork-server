@@ -5,8 +5,10 @@ package sh.vork.orm;
  *
  * <p>Implementations are provided for specific backends:
  * <ul>
+ *   <li>{@link sh.vork.orm.nitrite.NitriteRepositoryFactory} — Nitrite</li>
  *   <li>{@link sh.vork.orm.mongo.MongoRepositoryFactory} — MongoDB</li>
  *   <li>{@link sh.vork.orm.redis.RedisRepositoryFactory} — Redis</li>
+ *   <li>{@link sh.vork.orm.couchbase.CouchbaseRepositoryFactory} — Couchbase</li>
  * </ul>
  *
  * <p>Declare a {@code @Bean} for each entity type in a {@code @Configuration} class:

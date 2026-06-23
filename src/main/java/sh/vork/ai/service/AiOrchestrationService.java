@@ -152,6 +152,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
         private final ToolCallback listAgentTemplatesCallback;
         private final ToolCallback getDateTimeCallback;
         private final ToolCallback recordProgressCallback;
+        private final ToolCallback memoryCallback;
         private final ToolCallback thinkCallback;
         private final sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor;
         private final ConfigurableListableBeanFactory beanFactory;
@@ -171,6 +172,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                                                                   @org.springframework.beans.factory.annotation.Qualifier("listAgentTemplates") ToolCallback listAgentTemplatesCallback,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("getDateTime") ToolCallback getDateTimeCallback,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("recordProgress") ToolCallback recordProgressCallback,
+                                                                  @org.springframework.beans.factory.annotation.Qualifier("memory") ToolCallback memoryCallback,
                                                                   @org.springframework.beans.factory.annotation.Qualifier("think") ToolCallback thinkCallback,
                                                                   sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor,
                                                                   ConfigurableListableBeanFactory beanFactory,
@@ -188,6 +190,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                 this.listAgentTemplatesCallback = listAgentTemplatesCallback;
                 this.getDateTimeCallback = getDateTimeCallback;
                 this.recordProgressCallback = recordProgressCallback;
+                this.memoryCallback = memoryCallback;
                 this.thinkCallback = thinkCallback;
                 this.skillSecretSubstitutor = skillSecretSubstitutor;
                 this.beanFactory = beanFactory;
@@ -207,6 +210,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                                                                   ToolCallback listAgentTemplatesCallback,
                                                                   ToolCallback getDateTimeCallback,
                                                                   ToolCallback recordProgressCallback,
+                                                                  ToolCallback memoryCallback,
                                                                   ToolCallback thinkCallback,
                                                                   sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor) {
                 this(chatClientRegistry,
@@ -222,6 +226,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                         listAgentTemplatesCallback,
                         getDateTimeCallback,
                         recordProgressCallback,
+                        memoryCallback,
                         thinkCallback,
                         skillSecretSubstitutor,
                         null,
@@ -239,7 +244,42 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                                                                   sh.vork.skill.SkillToolCallbackFactory skillToolCallbackFactory,
                                                                   ToolCallback listAvailableToolsCallback,
                                                                   ToolCallback listAgentTemplatesCallback,
+                                                                  ToolCallback getDateTimeCallback,
                                                                   ToolCallback recordProgressCallback,
+                                                                  ToolCallback thinkCallback) {
+                this(chatClientRegistry,
+                        chatClientFactory,
+                        sessionEnvironmentService,
+                        aiSessionRepository,
+                        agentTemplateRepository,
+                        skillRepository,
+                        securedToolCallbackMap,
+                        sessionToolStore,
+                        skillToolCallbackFactory,
+                        listAvailableToolsCallback,
+                        listAgentTemplatesCallback,
+                        getDateTimeCallback,
+                        recordProgressCallback,
+                        null,
+                        thinkCallback,
+                        null,
+                        null,
+                        new ObjectMapper());
+        }
+
+        public AiOrchestrationService(Map<AiProvider, ChatClient> chatClientRegistry,
+                                                                  AiChatClientFactory chatClientFactory,
+                                                                  SessionEnvironmentService sessionEnvironmentService,
+                                                                  DatabaseRepository<AiSession> aiSessionRepository,
+                                                                  DatabaseRepository<AgentTemplate> agentTemplateRepository,
+                                                                  DatabaseRepository<sh.vork.skill.Skill> skillRepository,
+                                                                  Map<String, ToolCallback> securedToolCallbackMap,
+                                                                  SessionToolStore sessionToolStore,
+                                                                  sh.vork.skill.SkillToolCallbackFactory skillToolCallbackFactory,
+                                                                  ToolCallback listAvailableToolsCallback,
+                                                                  ToolCallback listAgentTemplatesCallback,
+                                                                  ToolCallback recordProgressCallback,
+                                                                  ToolCallback memoryCallback,
                                                                   ToolCallback thinkCallback,
                                                                   sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor) {
                 this(chatClientRegistry,
@@ -255,10 +295,48 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                         listAgentTemplatesCallback,
                         null,
                         recordProgressCallback,
+                        memoryCallback,
                         thinkCallback,
                         skillSecretSubstitutor,
                         null,
                         new ObjectMapper());
+        }
+
+        public AiOrchestrationService(Map<AiProvider, ChatClient> chatClientRegistry,
+                                                                  AiChatClientFactory chatClientFactory,
+                                                                  SessionEnvironmentService sessionEnvironmentService,
+                                                                  DatabaseRepository<AiSession> aiSessionRepository,
+                                                                  DatabaseRepository<AgentTemplate> agentTemplateRepository,
+                                                                  DatabaseRepository<sh.vork.skill.Skill> skillRepository,
+                                                                  Map<String, ToolCallback> securedToolCallbackMap,
+                                                                  SessionToolStore sessionToolStore,
+                                                                  sh.vork.skill.SkillToolCallbackFactory skillToolCallbackFactory,
+                                                                  ToolCallback listAvailableToolsCallback,
+                                                                  ToolCallback listAgentTemplatesCallback,
+                                                                  ToolCallback getDateTimeCallback,
+                                                                  ToolCallback recordProgressCallback,
+                                                                  ToolCallback thinkCallback,
+                                                                  sh.vork.ai.security.SkillSecretSubstitutor skillSecretSubstitutor,
+                                                                  ConfigurableListableBeanFactory beanFactory,
+                                                                  ObjectMapper objectMapper) {
+                this(chatClientRegistry,
+                        chatClientFactory,
+                        sessionEnvironmentService,
+                        aiSessionRepository,
+                        agentTemplateRepository,
+                        skillRepository,
+                        securedToolCallbackMap,
+                        sessionToolStore,
+                        skillToolCallbackFactory,
+                        listAvailableToolsCallback,
+                        listAgentTemplatesCallback,
+                        getDateTimeCallback,
+                        recordProgressCallback,
+                        null,
+                        thinkCallback,
+                        skillSecretSubstitutor,
+                        beanFactory,
+                        objectMapper);
         }
 
     /**
@@ -487,9 +565,10 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                                 }
 
                                 // Append skill-specific mandate: FINISHED_TURN is the only exit signal.
+                                appendEnvironmentVariables(prompt, sessionUuid);
                                 appendAvailableToolsSection(prompt);
                                 prompt.append(buildResponseMandate(true, false, false, false));
-                                return logAndReturn(prompt, sessionUuid, "SKILL"); // skip env-var block
+                                return logAndReturn(prompt, sessionUuid, "SKILL");
                         }
 
                         if (session.originMode() == SessionOriginMode.BACKGROUND) {
@@ -570,23 +649,7 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                         }
                 }
 
-                // Inject session environment variables
-                Map<String, String> envMap = sessionEnvironmentService.getEnv(sessionUuid);
-                if (envMap != null && !envMap.isEmpty()) {
-                        StringBuilder envBlock = new StringBuilder("\n### ACTIVE SESSION ENVIRONMENT VARIABLES\n");
-                        new java.util.TreeMap<>(envMap)
-                                .forEach((k, v) -> envBlock.append(k).append("=").append(v).append("\n"));
-                        prompt.append(envBlock);
-
-                        // Append expected output as a hard protocol rule if defined for this job
-                        String expectedOutput = envMap.get("JOB_EXPECTED_OUTPUT");
-                        if (expectedOutput != null && !expectedOutput.isBlank()) {
-                                prompt.append("\n### HARD REQUIREMENT — EXPECTED OUTPUT\n")
-                                        .append(expectedOutput).append("\n")
-                                        .append("You MUST produce this output before invoking completeBackgroundTask. ")
-                                        .append("Your report field MUST explicitly confirm whether this requirement was met.\n");
-                        }
-                }
+                appendEnvironmentVariables(prompt, sessionUuid);
 
                 // Mandate structured output — scope of valid statuses depends on agent capability.
                 appendAvailableToolsSection(prompt);
@@ -764,6 +827,9 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
                 }
                 if (presentNames.add("recordProgress") && recordProgressCallback != null) {
                         merged.add(recordProgressCallback);
+                }
+                if (presentNames.add("memory") && memoryCallback != null) {
+                        merged.add(memoryCallback);
                 }
                 if (presentNames.add("getDateTime") && getDateTimeCallback != null) {
                         merged.add(getDateTimeCallback);
@@ -1078,9 +1144,30 @@ BACKGROUND OPERATIONAL PROTOCOL: You are executing autonomously in an isolated b
 
                 // think is always available.
                 names.add("think");
+                names.add("memory");
                 names.add("getDateTime");
 
                 return Set.copyOf(names);
+        }
+
+        private void appendEnvironmentVariables(StringBuilder prompt, String sessionUuid) {
+                Map<String, String> envMap = sessionEnvironmentService.getEnv(sessionUuid);
+                if (envMap == null || envMap.isEmpty()) {
+                        return;
+                }
+
+                StringBuilder envBlock = new StringBuilder("\n### ACTIVE SESSION ENVIRONMENT VARIABLES\n");
+                new java.util.TreeMap<>(envMap)
+                        .forEach((k, v) -> envBlock.append(k).append("=").append(v).append("\n"));
+                prompt.append(envBlock);
+
+                String expectedOutput = envMap.get("JOB_EXPECTED_OUTPUT");
+                if (expectedOutput != null && !expectedOutput.isBlank()) {
+                        prompt.append("\n### HARD REQUIREMENT — EXPECTED OUTPUT\n")
+                                .append(expectedOutput).append("\n")
+                                .append("You MUST produce this output before invoking completeBackgroundTask. ")
+                                .append("Your report field MUST explicitly confirm whether this requirement was met.\n");
+                }
         }
 
         private void appendAvailableToolsSection(StringBuilder prompt) {

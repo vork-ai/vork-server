@@ -251,6 +251,12 @@ mvn spring-boot:run
 
 Configuration is read from `conf.d/database.properties` (relative to the working directory). If the file is absent, Nitrite defaults are used.
 
+Database setup guides:
+
+- MongoDB: [MONGODB.md](MONGODB.md)
+- Redis: [REDDIS.md](REDDIS.md)
+- Couchbase: [COUCHBASE.md](COUCHBASE.md)
+
 ---
 
 ## About the Architect

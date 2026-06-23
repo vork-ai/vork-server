@@ -100,6 +100,12 @@ public class SetupController {
             case "nitrite" -> Map.of(
                     "backend",  s.backend(),
                     "database", s.database() != null ? s.database() : "");
+            case "couchbase" -> Map.of(
+                "backend",  s.backend(),
+                "host",     s.host(),
+                "port",     s.port(),
+                "database", s.database() != null ? s.database() : "",
+                "username", s.username() != null ? s.username() : "");
             case "redis" -> Map.of(
                     "backend",  s.backend(),
                     "host",     s.host(),

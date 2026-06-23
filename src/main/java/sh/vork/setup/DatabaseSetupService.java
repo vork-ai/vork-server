@@ -5,6 +5,9 @@ import com.mongodb.MongoCredential;
 import com.mongodb.ServerAddress;
 import com.mongodb.client.MongoClient;
 import com.mongodb.client.MongoClients;
+import com.couchbase.client.java.Bucket;
+import com.couchbase.client.java.Cluster;
+import com.couchbase.client.java.ClusterOptions;
 import org.dizitart.no2.Nitrite;
 import org.dizitart.no2.mvstore.MVStoreModule;
 import org.bson.Document;
@@ -20,6 +23,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.List;
 import java.util.Properties;
 import java.util.concurrent.TimeUnit;
@@ -60,6 +64,13 @@ public class DatabaseSetupService {
         String backend = props.getProperty("db.backend", "nitrite");
 
         DatabaseSettings result = switch (backend) {
+            case "couchbase" -> new DatabaseSettings(
+                "couchbase",
+                props.getProperty("couchbase.host", "localhost"),
+                parsePort(props.getProperty("couchbase.port"), 8091),
+                props.getProperty("couchbase.bucket", "vork"),
+                props.getProperty("couchbase.username", "Administrator"),
+                props.getProperty("couchbase.password", "password"));
             case "redis" -> new DatabaseSettings(
                     "redis",
                     props.getProperty("redis.host", "localhost"),
@@ -102,6 +113,7 @@ public class DatabaseSetupService {
         log.debug("ENTER testConnection: backend={}, host={}, port={}",
                 settings.backend(), settings.host(), settings.port());
         TestResult result = switch (settings.backend()) {
+            case "couchbase" -> testCouchbase(settings);
             case "redis"    -> testRedis(settings);
             case "nitrite"  -> testNitrite(settings);
             default         -> testMongo(settings);
@@ -121,9 +133,29 @@ public class DatabaseSetupService {
             db.close();
             return TestResult.success();
         } catch (Exception e) {
+            if (isActiveNitriteSelfLock(path, e)) {
+                log.debug("Nitrite self-lock detected for active path {}; treating as success.", path);
+                return TestResult.success();
+            }
             log.debug("Nitrite connection test failed: {}", e.getMessage());
             return TestResult.failure("Cannot open Nitrite database: " + e.getMessage());
         }
+    }
+
+    private boolean isActiveNitriteSelfLock(String candidatePath, Exception ex) {
+        String message = ex.getMessage() == null ? "" : ex.getMessage().toLowerCase();
+        if (!message.contains("already opened in other process")) {
+            return false;
+        }
+
+        String currentBackend = getCurrentBackend();
+        if (!"nitrite".equalsIgnoreCase(currentBackend)) {
+            return false;
+        }
+
+        String activePath = dbFilePath(getCurrentSettings());
+        return java.nio.file.Path.of(activePath).normalize()
+                .equals(java.nio.file.Path.of(candidatePath).normalize());
     }
 
     private static String dbFilePath(DatabaseSettings s) {
@@ -157,6 +189,27 @@ public class DatabaseSetupService {
         }
     }
 
+    private TestResult testCouchbase(DatabaseSettings s) {
+        String host = (s.host() == null || s.host().isBlank()) ? "localhost" : s.host();
+        int port = s.port() > 0 ? s.port() : 8091;
+        String bucketName = (s.database() == null || s.database().isBlank()) ? "vork" : s.database();
+        if (s.username() == null || s.username().isBlank()) {
+            return TestResult.failure("Couchbase username is required.");
+        }
+
+        String connStr = "couchbase://" + host + ":" + port;
+        try (Cluster cluster = Cluster.connect(connStr,
+                ClusterOptions.clusterOptions(s.username(), s.password() != null ? s.password() : ""))) {
+            cluster.waitUntilReady(Duration.ofSeconds(5));
+            Bucket bucket = cluster.bucket(bucketName);
+            bucket.waitUntilReady(Duration.ofSeconds(5));
+            return TestResult.success();
+        } catch (Exception e) {
+            log.debug("Couchbase connection test failed: {}", e.getMessage());
+            return TestResult.failure("Cannot connect to Couchbase: " + e.getMessage());
+        }
+    }
+
     // -------------------------------------------------------------------------
     // Persistence
     // -------------------------------------------------------------------------
@@ -178,6 +231,16 @@ public class DatabaseSetupService {
             if (settings.password() != null && !settings.password().isBlank()) {
                 props.setProperty("redis.password", settings.password());
             }
+        } else if ("couchbase".equals(settings.backend())) {
+            props.setProperty("couchbase.host",
+                settings.host() != null && !settings.host().isBlank() ? settings.host() : "localhost");
+            props.setProperty("couchbase.port", String.valueOf(settings.port() > 0 ? settings.port() : 8091));
+            props.setProperty("couchbase.bucket",
+                settings.database() != null && !settings.database().isBlank() ? settings.database() : "vork");
+            props.setProperty("couchbase.username",
+                settings.username() != null ? settings.username() : "");
+            props.setProperty("couchbase.password",
+                settings.password() != null ? settings.password() : "");
         } else if ("nitrite".equals(settings.backend())) {
             props.setProperty("nitrite.file.path", dbFilePath(settings));
         } else {
